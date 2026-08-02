@@ -1,6 +1,6 @@
 services:
   mysql:
-    image: mysql:8.4
+    image: docker.m.daocloud.io/library/mysql:8.4
     restart: unless-stopped
     environment:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-pes8_platform}
@@ -19,7 +19,7 @@ services:
       retries: 20
 
   redis:
-    image: redis:7.4-alpine
+    image: docker.m.daocloud.io/library/redis:7.4-alpine
     restart: unless-stopped
     command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis-dev-password}
     ports:

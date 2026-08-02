@@ -1,4 +1,4 @@
-FROM golang:1.24-alpine AS development
+FROM docker.m.daocloud.io/library/golang:1.24-alpine AS development
 WORKDIR /app
 RUN apk add --no-cache ca-certificates tzdata
 COPY go.mod ./
