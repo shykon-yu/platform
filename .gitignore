@@ -1,0 +1,10 @@
+.DS_Store
+.env
+**/.env
+.pnpm-store/
+**/node_modules/
+**/dist/
+**/target/
+**/Cargo.lock
+backend/tmp/
+data/
