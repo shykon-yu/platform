@@ -11,7 +11,8 @@ jobs:
     runs-on: windows-latest
 
     env:
-      RUST_TARGET: x86_64-win7-windows-msvc
+      RUST_TOOLCHAIN: 1.77.2
+      RUST_TARGET: x86_64-pc-windows-msvc
 
     defaults:
       run:
@@ -34,8 +35,9 @@ jobs:
           cache-dependency-path: frontend/pnpm-lock.yaml
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ env.RUST_TARGET }}
 
       - name: Install NSIS
