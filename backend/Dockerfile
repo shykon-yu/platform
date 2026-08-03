@@ -1,7 +1,9 @@
-FROM docker.m.daocloud.io/library/golang:1.24-alpine AS development
+FROM docker.m.daocloud.io/library/golang:1.24-bookworm AS development
 WORKDIR /app
 ENV GOPROXY=https://goproxy.cn,direct
-RUN apk add --no-cache ca-certificates tzdata
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates tzdata \
+    && rm -rf /var/lib/apt/lists/*
 COPY go.mod ./
 RUN go mod download
 COPY . .
