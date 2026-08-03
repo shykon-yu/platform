@@ -78,6 +78,8 @@ type lease struct {
 	ServerPort int       `json:"server_port"`
 }
 
+const leaseTTL = 30 * time.Minute
+
 func main() {
 	cfg := loadConfig()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
@@ -124,6 +126,7 @@ func main() {
 			r.Get("/rooms", a.listRooms)
 			r.Get("/rooms/{roomID}", a.getRoom)
 			r.Post("/rooms/{roomID}/join", a.joinRoom)
+			r.Post("/rooms/{roomID}/heartbeat", a.heartbeatRoom)
 			r.Post("/rooms/{roomID}/leave", a.leaveRoom)
 			r.Get("/rooms/{roomID}/events", a.roomEvents)
 		})
@@ -399,7 +402,7 @@ func (a *app) joinRoom(w http.ResponseWriter, r *http.Request) {
 			respondError(w, 500, "无法刷新连接凭据")
 			return
 		}
-		expiresAt := time.Now().Add(30 * time.Minute)
+		expiresAt := time.Now().Add(leaseTTL)
 		if _, updateErr := tx.ExecContext(r.Context(), "UPDATE room_ip_leases SET credential_expires_at = ? WHERE room_id = ? AND user_id = ? AND released_at IS NULL", expiresAt, roomID, userID); updateErr != nil {
 			respondError(w, 500, "无法刷新连接凭据")
 			return
@@ -431,7 +434,7 @@ func (a *app) joinRoom(w http.ResponseWriter, r *http.Request) {
 		respondError(w, 500, "无法创建连接凭据")
 		return
 	}
-	expiresAt := time.Now().Add(30 * time.Minute)
+	expiresAt := time.Now().Add(leaseTTL)
 	if _, err := tx.ExecContext(r.Context(), "INSERT INTO room_ip_leases (room_id, user_id, virtual_ip, softether_username, credential_expires_at) VALUES (?, ?, ?, ?, ?)", roomID, userID, ip, username, expiresAt); err != nil {
 		respondError(w, 500, "无法分配虚拟地址")
 		return
@@ -447,6 +450,53 @@ func (a *app) joinRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondJSON(w, 200, map[string]any{"lease": lease{RoomID: roomID, VirtualIP: ip, Username: username, Password: password, HubName: hub, SubnetCIDR: subnet, ExpiresAt: expiresAt, ServerHost: a.config.softEtherClientHost, ServerPort: a.config.softEtherClientPort}})
+}
+
+func (a *app) heartbeatRoom(w http.ResponseWriter, r *http.Request) {
+	roomID, ok := roomIDFromRequest(w, r)
+	if !ok {
+		return
+	}
+	userID := currentUserID(r)
+	var leaseID int64
+	var username, hub string
+	err := a.db.QueryRowContext(r.Context(), `
+		SELECT l.id, l.softether_username, rooms.hub_name
+		FROM room_ip_leases l
+		INNER JOIN rooms ON rooms.id = l.room_id
+		WHERE l.room_id = ? AND l.user_id = ? AND l.released_at IS NULL
+			AND l.credential_expires_at > CURRENT_TIMESTAMP
+		ORDER BY l.id DESC
+		LIMIT 1`, roomID, userID).Scan(&leaseID, &username, &hub)
+	if err == sql.ErrNoRows {
+		respondError(w, http.StatusConflict, "房间连接已过期，请重新进入")
+		return
+	}
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "无法续期房间连接")
+		return
+	}
+
+	expiresAt := time.Now().Add(leaseTTL)
+	if err := a.vpn.Renew(r.Context(), hub, username, expiresAt); err != nil {
+		a.logger.Error("renew SoftEther credential", "room_id", roomID, "user_id", userID, "error", err)
+		respondError(w, http.StatusBadGateway, "无法续期虚拟网络凭据")
+		return
+	}
+	result, err := a.db.ExecContext(r.Context(), `
+		UPDATE room_ip_leases
+		SET credential_expires_at = ?
+		WHERE id = ? AND room_id = ? AND user_id = ? AND released_at IS NULL
+			AND credential_expires_at > CURRENT_TIMESTAMP`, expiresAt, leaseID, roomID, userID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "无法续期房间连接")
+		return
+	}
+	if affected, _ := result.RowsAffected(); affected == 0 {
+		respondError(w, http.StatusConflict, "房间连接已结束，请重新进入")
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"expires_at": expiresAt})
 }
 
 func (a *app) leaveRoom(w http.ResponseWriter, r *http.Request) {

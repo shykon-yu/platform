@@ -7,6 +7,13 @@ export type Lease = { room_id: number; virtual_ip: string; username: string; pas
 type SessionResponse = { token: string; user: User }
 let token = localStorage.getItem('pes8.access-token') ?? ''
 
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message)
+    this.name = 'ApiError'
+  }
+}
+
 export function setToken(value: string) {
   token = value
   localStorage.setItem('pes8.access-token', value)
@@ -23,7 +30,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (token) headers.set('Authorization', `Bearer ${token}`)
   const response = await fetch(`${apiBase}${path}`, { ...options, headers })
   const body = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(body.error ?? '请求失败，请稍后重试')
+  if (!response.ok) throw new ApiError(body.error ?? '请求失败，请稍后重试', response.status)
   return body as T
 }
 
@@ -36,5 +43,6 @@ export const authApi = {
 export const roomApi = {
   list: () => request<{ rooms: Room[] }>('/rooms'),
   join: (roomID: number) => request<{ lease: Lease }>(`/rooms/${roomID}/join`, { method: 'POST' }),
+  heartbeat: (roomID: number) => request<{ expires_at: string }>(`/rooms/${roomID}/heartbeat`, { method: 'POST' }),
   leave: (roomID: number) => request<{ ok: boolean }>(`/rooms/${roomID}/leave`, { method: 'POST' }),
 }

@@ -19,6 +19,7 @@ type Credential struct {
 
 type Provisioner interface {
 	Provision(context.Context, Credential) error
+	Renew(context.Context, string, string, time.Time) error
 	Revoke(context.Context, string, string) error
 }
 
@@ -45,12 +46,16 @@ func New(config Config) (Provisioner, error) {
 
 type mockProvisioner struct{}
 
-func (mockProvisioner) Provision(context.Context, Credential) error  { return nil }
+func (mockProvisioner) Provision(context.Context, Credential) error { return nil }
+func (mockProvisioner) Renew(context.Context, string, string, time.Time) error {
+	return nil
+}
 func (mockProvisioner) Revoke(context.Context, string, string) error { return nil }
 
 type vpncmdProvisioner struct {
 	path, endpoint, password string
 	logger                   *slog.Logger
+	execute                  func(context.Context, string, ...string) ([]byte, error)
 }
 
 var safeIdentifier = regexp.MustCompile(`^[a-zA-Z0-9._-]{1,96}$`)
@@ -83,11 +88,25 @@ func (p *vpncmdProvisioner) Revoke(ctx context.Context, hub, username string) er
 	return p.command(ctx, hub, "UserDelete", username)
 }
 
+func (p *vpncmdProvisioner) Renew(ctx context.Context, hub, username string, expiresAt time.Time) error {
+	if !safeIdentifier.MatchString(hub) || !safeIdentifier.MatchString(username) {
+		return errors.New("invalid SoftEther hub or username")
+	}
+	expires := expiresAt.UTC().Format("2006/01/02_15:04:05")
+	return p.command(ctx, hub, "UserExpiresSet", username, "/EXPIRES:"+expires)
+}
+
 func (p *vpncmdProvisioner) command(ctx context.Context, hub, command string, args ...string) error {
 	commandCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	baseArgs := []string{p.endpoint, "/SERVER", "/PASSWORD:" + p.password, "/ADMINHUB:" + hub, "/CMD", command}
-	_, err := exec.CommandContext(commandCtx, p.path, append(baseArgs, args...)...).CombinedOutput()
+	execute := p.execute
+	if execute == nil {
+		execute = func(ctx context.Context, path string, args ...string) ([]byte, error) {
+			return exec.CommandContext(ctx, path, args...).CombinedOutput()
+		}
+	}
+	_, err := execute(commandCtx, p.path, append(baseArgs, args...)...)
 	if err != nil {
 		p.logger.Error("vpncmd failed", "hub", hub, "command", command, "error", err)
 		return fmt.Errorf("vpncmd %s failed: %w", command, err)
