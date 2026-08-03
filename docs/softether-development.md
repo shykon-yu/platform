@@ -33,7 +33,7 @@ API 容器需要挂载与 VPN Server 版本一致的 `vpncmd` Linux 可执行文
 
 Tauri 客户端进入房间后会调用本机 SoftEther Client 的 `vpncmd.exe`：
 
-1. 查找或创建名为 `VPNWE8` 的虚拟网卡。
+1. 查找已有 SoftEther 虚拟网卡；没有时创建 `VPN`，如被占用则依次尝试 `VPN2` 到 `VPN127`。
 2. 创建名为 `WEL-<平台分配用户名>` 的 VPN Client 连接。
 3. 写入 API 返回的服务器地址、端口、Virtual Hub、临时用户名和密码。
 4. 自动连接；退出房间时断开并删除该连接。

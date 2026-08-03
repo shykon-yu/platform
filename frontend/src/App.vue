@@ -94,7 +94,6 @@ async function joinRoom(room: Room) {
         hub: lease.hub_name,
         username: lease.username,
         password: lease.password,
-        nicName: 'VPNWE8',
       })
     }
     startLeaseHeartbeat()

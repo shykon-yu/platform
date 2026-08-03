@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use tauri::Manager;
 
-const DEFAULT_NIC_NAME: &str = "VPNWE8";
+const DEFAULT_NIC_NAME: &str = "VPN";
 
 #[tauri::command]
 fn launch_game(path: String) -> Result<(), String> {
@@ -28,17 +28,10 @@ fn connect_vpn(
         return Err("VPN 连接参数不完整".into());
     }
 
-    let nic = nic_name
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| DEFAULT_NIC_NAME.to_string());
-    validate_identifier(&nic, "虚拟网卡")?;
     let vpncmd = locate_vpncmd()?;
 
     let nic_list = run_vpncmd(&vpncmd, &["localhost", "/CLIENT", "/CMD", "NicList"])?;
-    let nic_exists = String::from_utf8_lossy(&nic_list.stdout).contains(&nic);
-    if !nic_exists {
-        run_vpncmd(&vpncmd, &["localhost", "/CLIENT", "/CMD", "NicCreate", &nic])?;
-    }
+    let nic = resolve_nic(&vpncmd, &nic_list, nic_name)?;
 
     let account = format!("WEL-{}", username);
     validate_identifier(&account, "VPN 连接名称")?;
@@ -108,6 +101,81 @@ fn validate_identifier(value: &str, label: &str) -> Result<(), String> {
         return Err(format!("{label}格式不正确"));
     }
     Ok(())
+}
+
+fn resolve_nic(vpncmd: &Path, nic_list: &Output, preferred: Option<String>) -> Result<String, String> {
+    let candidates = nic_candidates(preferred);
+    let nic_list_text = String::from_utf8_lossy(&nic_list.stdout);
+    if let Some(existing) = candidates
+        .iter()
+        .find(|candidate| nic_list_contains(&nic_list_text, candidate))
+    {
+        return Ok(existing.clone());
+    }
+
+    let mut last_error = None;
+    for candidate in candidates {
+        match run_vpncmd(vpncmd, &["localhost", "/CLIENT", "/CMD", "NicCreate", &candidate]) {
+            Ok(_) => return Ok(candidate),
+            Err(error) => {
+                let refreshed = run_vpncmd(vpncmd, &["localhost", "/CLIENT", "/CMD", "NicList"])?;
+                let refreshed_text = String::from_utf8_lossy(&refreshed.stdout);
+                if nic_list_contains(&refreshed_text, &candidate) {
+                    return Ok(candidate);
+                }
+                if !is_nic_name_unavailable_error(&error) {
+                    return Err(error);
+                }
+                last_error = Some(error);
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| "无法创建 SoftEther 虚拟网卡".into()))
+}
+
+fn nic_candidates(preferred: Option<String>) -> Vec<String> {
+    let mut candidates = Vec::new();
+    if let Some(name) = preferred.map(|value| value.trim().to_string()) {
+        if is_softether_nic_name(&name) {
+            candidates.push(name);
+        }
+    }
+    for index in 1..=127 {
+        let name = if index == 1 {
+            DEFAULT_NIC_NAME.to_string()
+        } else {
+            format!("VPN{index}")
+        };
+        if !candidates.iter().any(|candidate| candidate == &name) {
+            candidates.push(name);
+        }
+    }
+    candidates
+}
+
+fn is_softether_nic_name(value: &str) -> bool {
+    if value == "VPN" {
+        return true;
+    }
+    value
+        .strip_prefix("VPN")
+        .and_then(|suffix| suffix.parse::<u8>().ok())
+        .is_some_and(|number| (2..=127).contains(&number))
+}
+
+fn nic_list_contains(output: &str, nic: &str) -> bool {
+    output.lines().any(|line| {
+        line.split('|')
+            .any(|part| part.trim().eq_ignore_ascii_case(nic))
+    })
+}
+
+fn is_nic_name_unavailable_error(error: &str) -> bool {
+    error.contains("错误代码: 32")
+        || error.contains("Error code: 32")
+        || error.contains("specified name")
+        || error.contains("指定名称")
 }
 
 fn locate_vpncmd() -> Result<PathBuf, String> {
