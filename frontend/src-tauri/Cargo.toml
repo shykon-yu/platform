@@ -1,6 +1,6 @@
 [package]
 name = "pes8-platform"
-version = "0.1.0"
+version = "0.1.1"
 description = "WE8 online arena desktop client"
 authors = ["WEL Platform"]
 edition = "2021"
