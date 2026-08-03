@@ -51,9 +51,8 @@ jobs:
         run: |
           cargo generate-lockfile --manifest-path src-tauri/Cargo.toml
           cargo update --manifest-path src-tauri/Cargo.toml -p 'plist@1.10.0' --precise 1.7.0
+          cargo update --manifest-path src-tauri/Cargo.toml -p 'serde_with@3.21.0' --precise 3.12.0
           cargo update --manifest-path src-tauri/Cargo.toml -p 'time@0.3.55' --precise 0.3.36
-          cargo update --manifest-path src-tauri/Cargo.toml -p 'time-core@0.1.9' --precise 0.1.2
-          cargo update --manifest-path src-tauri/Cargo.toml -p 'time-macros@0.2.32' --precise 0.2.18
           $lockVersion = Select-String -Path src-tauri/Cargo.lock -Pattern '^version = ' | Select-Object -First 1
           Write-Host $lockVersion.Line
           if ($lockVersion.Line -ne 'version = 3') {
