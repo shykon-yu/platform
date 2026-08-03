@@ -135,11 +135,21 @@ fn run_vpncmd(vpncmd: &Path, args: &[&str]) -> Result<Output, String> {
         .output()
         .map_err(|error| format!("无法启动 SoftEther 客户端：{error}"))?;
     if !output.status.success() {
-        let detail = String::from_utf8_lossy(&output.stderr);
-        return Err(if detail.trim().is_empty() {
-            "SoftEther 客户端命令执行失败".into()
+        let command = args
+            .windows(2)
+            .find_map(|items| (items[0] == "/CMD").then_some(items[1]))
+            .unwrap_or("vpncmd");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = [stdout.trim(), stderr.trim()]
+            .into_iter()
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Err(if detail.is_empty() {
+            format!("SoftEther 客户端命令执行失败：{command}")
         } else {
-            format!("SoftEther 客户端命令执行失败：{detail}")
+            format!("SoftEther 客户端命令执行失败：{command}\n{detail}")
         });
     }
     Ok(output)

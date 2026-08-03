@@ -166,7 +166,11 @@ async function logout() {
     loading.value = false
   }
 }
-function messageOf(error: unknown) { return error instanceof Error ? error.message : '发生未知错误' }
+function messageOf(error: unknown) {
+  if (typeof error === 'string') return error
+  if (error instanceof Error) return error.message
+  return '发生未知错误'
+}
 
 onMounted(restoreSession)
 onBeforeUnmount(stopLeaseHeartbeat)
