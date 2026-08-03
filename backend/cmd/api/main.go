@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -18,17 +19,18 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/go-sql-driver/mysql"
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/websocket"
 	"github.com/redis/go-redis/v9"
-	"golang.org/x/crypto/bcrypt"
 
+	"pes8-platform/backend/internal/platformdb"
 	"pes8-platform/backend/internal/vpn"
 )
 
 type config struct {
 	port, mysqlDSN, redisAddr, redisPassword, jwtSecret string
+	soccerAuthURL                                       string
 	corsOrigins                                         map[string]bool
 	softEtherMode, vpncmdPath, softEtherAdminEndpoint   string
 	softEtherAdminPassword, softEtherClientHost         string
@@ -40,6 +42,7 @@ type app struct {
 	redis    *redis.Client
 	config   config
 	logger   *slog.Logger
+	http     *http.Client
 	upgrader websocket.Upgrader
 	vpn      vpn.Provisioner
 }
@@ -50,10 +53,28 @@ type claims struct {
 }
 
 type user struct {
-	ID       int64  `json:"id"`
-	Username string `json:"username"`
-	Nickname string `json:"nickname"`
+	ID           int64  `json:"id"`
+	SoccerUserID int64  `json:"-"`
+	Username     string `json:"username"`
+	Nickname     string `json:"nickname"`
 }
+
+type soccerAuthResponse struct {
+	Code int `json:"code"`
+	Data *struct {
+		User struct {
+			ID       int64  `json:"id"`
+			Username string `json:"username"`
+			Nickname string `json:"nickname"`
+			Status   int    `json:"status"`
+		} `json:"user"`
+	} `json:"data"`
+}
+
+var (
+	errSoccerAccountDisabled = errors.New("soccer account disabled")
+	errSoccerRateLimited     = errors.New("soccer login rate limited")
+)
 
 type room struct {
 	ID         int64  `json:"id"`
@@ -78,7 +99,10 @@ type lease struct {
 	ServerPort int       `json:"server_port"`
 }
 
-const leaseTTL = 30 * time.Minute
+const (
+	jwtIssuer = "pes8-platform"
+	leaseTTL  = 30 * time.Minute
+)
 
 func main() {
 	cfg := loadConfig()
@@ -97,6 +121,10 @@ func main() {
 		logger.Error("connect database", "error", err)
 		os.Exit(1)
 	}
+	if err := platformdb.Migrate(ctx, db); err != nil {
+		logger.Error("migrate platform database", "error", err)
+		os.Exit(1)
+	}
 
 	redisClient := redis.NewClient(&redis.Options{Addr: cfg.redisAddr, Password: cfg.redisPassword})
 	if err := redisClient.Ping(ctx).Err(); err != nil {
@@ -109,7 +137,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	a := &app{db: db, redis: redisClient, config: cfg, logger: logger, vpn: vpnProvisioner,
+	a := &app{db: db, redis: redisClient, config: cfg, logger: logger, vpn: vpnProvisioner, http: &http.Client{Timeout: 8 * time.Second},
 		upgrader: websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return aOriginAllowed(cfg, r.Header.Get("Origin")) }},
 	}
 	go a.runLeaseReaper(context.Background())
@@ -117,7 +145,6 @@ func main() {
 	r.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer, a.requestLogger, a.cors)
 	r.Get("/healthz", a.health)
 	r.Route("/api/v1", func(r chi.Router) {
-		r.Post("/auth/register", a.register)
 		r.Post("/auth/login", a.login)
 		r.Group(func(r chi.Router) {
 			r.Use(a.auth)
@@ -154,6 +181,7 @@ func loadConfig() config {
 		port: getenv("API_PORT", "8080"), mysqlDSN: getenv("MYSQL_DSN", "pes8:pes8-dev-password@tcp(localhost:3306)/pes8_platform?parseTime=true&charset=utf8mb4&loc=Local"),
 		redisAddr: getenv("REDIS_ADDR", "localhost:6379"), redisPassword: getenv("REDIS_PASSWORD", "redis-dev-password"),
 		jwtSecret: getenv("JWT_SECRET", "local-development-secret-change-before-production"), corsOrigins: origins,
+		soccerAuthURL: getenv("SOCCER_AUTH_URL", "http://localhost/api/v1/auth/login"),
 		softEtherMode: getenv("SOFTETHER_MODE", "mock"), vpncmdPath: getenv("SOFTETHER_VPNCMD_PATH", "/usr/local/bin/vpncmd"),
 		softEtherAdminEndpoint: getenv("SOFTETHER_ADMIN_ENDPOINT", "localhost:5555"), softEtherAdminPassword: getenv("SOFTETHER_ADMIN_PASSWORD", ""),
 		softEtherClientHost: getenv("SOFTETHER_CLIENT_HOST", "pending-softether-host"), softEtherClientPort: envInt("SOFTETHER_CLIENT_PORT", 443),
@@ -204,40 +232,6 @@ func (a *app) health(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func (a *app) register(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-		Nickname string `json:"nickname"`
-	}
-	if !decodeJSON(w, r, &input) {
-		return
-	}
-	input.Username, input.Nickname = strings.TrimSpace(input.Username), strings.TrimSpace(input.Nickname)
-	if len([]rune(input.Username)) < 3 || len([]rune(input.Username)) > 32 || len([]rune(input.Password)) < 8 || len([]rune(input.Password)) > 72 || len([]rune(input.Nickname)) < 2 || len([]rune(input.Nickname)) > 32 {
-		respondError(w, http.StatusBadRequest, "账号、密码或昵称格式不正确")
-		return
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "无法创建账号")
-		return
-	}
-	result, err := a.db.ExecContext(r.Context(), "INSERT INTO users (username, password_hash, nickname) VALUES (?, ?, ?)", input.Username, string(hash), input.Nickname)
-	if err != nil {
-		var mysqlErr *mysql.MySQLError
-		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
-			respondError(w, http.StatusConflict, "账号或昵称已存在")
-			return
-		}
-		a.logger.Error("register", "error", err)
-		respondError(w, http.StatusInternalServerError, "无法创建账号")
-		return
-	}
-	u := user{ID: resultLastID(result), Username: input.Username, Nickname: input.Nickname}
-	a.respondSession(w, u)
-}
-
 func (a *app) login(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Username string `json:"username"`
@@ -246,14 +240,104 @@ func (a *app) login(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	var u user
-	var hash, status string
-	err := a.db.QueryRowContext(r.Context(), "SELECT id, username, nickname, password_hash, status FROM users WHERE username = ?", strings.TrimSpace(input.Username)).Scan(&u.ID, &u.Username, &u.Nickname, &hash, &status)
-	if err != nil || status != "active" || bcrypt.CompareHashAndPassword([]byte(hash), []byte(input.Password)) != nil {
+	input.Username = strings.TrimSpace(input.Username)
+	if input.Username == "" || input.Password == "" {
+		respondError(w, http.StatusBadRequest, "请输入账号和密码")
+		return
+	}
+
+	u, rejected, err := a.authenticateWithSoccer(r.Context(), input.Username, input.Password)
+	if err != nil {
+		if errors.Is(err, errSoccerAccountDisabled) {
+			respondError(w, http.StatusForbidden, "账号已被禁用")
+			return
+		}
+		if errors.Is(err, errSoccerRateLimited) {
+			respondError(w, http.StatusTooManyRequests, "登录尝试过于频繁，请稍后再试")
+			return
+		}
+		a.logger.Error("soccer authentication", "error", err)
+		respondError(w, http.StatusBadGateway, "账号服务暂时不可用")
+		return
+	}
+	if rejected {
 		respondError(w, http.StatusUnauthorized, "账号或密码错误")
 		return
 	}
+
+	result, err := a.db.ExecContext(r.Context(), `
+		INSERT INTO platform_users (soccer_user_id, username_snapshot, nickname_snapshot, last_login_at)
+		VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+		ON DUPLICATE KEY UPDATE
+			username_snapshot = VALUES(username_snapshot),
+			nickname_snapshot = VALUES(nickname_snapshot),
+			last_login_at = CURRENT_TIMESTAMP,
+			id = LAST_INSERT_ID(id)`, u.SoccerUserID, u.Username, u.Nickname)
+	if err != nil {
+		a.logger.Error("sync platform user", "error", err)
+		respondError(w, http.StatusInternalServerError, "无法创建平台会话")
+		return
+	}
+	u.ID = resultLastID(result)
+	var status string
+	if err := a.db.QueryRowContext(r.Context(), "SELECT status FROM platform_users WHERE id = ?", u.ID).Scan(&status); err != nil {
+		respondError(w, http.StatusInternalServerError, "无法创建平台会话")
+		return
+	}
+	if status != "active" {
+		respondError(w, http.StatusForbidden, "平台账号已被禁用")
+		return
+	}
 	a.respondSession(w, u)
+}
+
+func (a *app) authenticateWithSoccer(ctx context.Context, username, password string) (user, bool, error) {
+	payload, err := json.Marshal(map[string]string{"username": username, "password": password})
+	if err != nil {
+		return user{}, false, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.config.soccerAuthURL, strings.NewReader(string(payload)))
+	if err != nil {
+		return user{}, false, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	response, err := a.http.Do(req)
+	if err != nil {
+		return user{}, false, err
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	if err != nil {
+		return user{}, false, err
+	}
+	var auth soccerAuthResponse
+	if err := json.Unmarshal(body, &auth); err != nil {
+		return user{}, false, fmt.Errorf("decode soccer auth response: %w", err)
+	}
+	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusUnprocessableEntity {
+		return user{}, true, nil
+	}
+	if response.StatusCode == http.StatusForbidden {
+		return user{}, false, errSoccerAccountDisabled
+	}
+	if response.StatusCode == http.StatusTooManyRequests {
+		return user{}, false, errSoccerRateLimited
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return user{}, false, fmt.Errorf("unexpected soccer auth response: status=%d code=%d", response.StatusCode, auth.Code)
+	}
+	if auth.Code != 0 {
+		return user{}, true, nil
+	}
+	if auth.Data == nil || auth.Data.User.ID == 0 || auth.Data.User.Status != 1 {
+		return user{}, false, fmt.Errorf("soccer auth response has no active user")
+	}
+	return user{
+		SoccerUserID: auth.Data.User.ID,
+		Username:     auth.Data.User.Username,
+		Nickname:     auth.Data.User.Nickname,
+	}, false, nil
 }
 
 func (a *app) respondSession(w http.ResponseWriter, u user) {
@@ -265,7 +349,7 @@ func (a *app) respondSession(w http.ResponseWriter, u user) {
 	respondJSON(w, http.StatusOK, map[string]any{"token": token, "user": u})
 }
 func (a *app) issueToken(u user) (string, error) {
-	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims{UserID: u.ID, RegisteredClaims: jwt.RegisteredClaims{Subject: strconv.FormatInt(u.ID, 10), ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)), IssuedAt: jwt.NewNumericDate(time.Now())}}).SignedString([]byte(a.config.jwtSecret))
+	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims{UserID: u.ID, RegisteredClaims: jwt.RegisteredClaims{Issuer: jwtIssuer, Subject: strconv.FormatInt(u.ID, 10), ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)), IssuedAt: jwt.NewNumericDate(time.Now())}}).SignedString([]byte(a.config.jwtSecret))
 }
 
 func (a *app) auth(next http.Handler) http.Handler {
@@ -276,7 +360,7 @@ func (a *app) auth(next http.Handler) http.Handler {
 				return nil, errors.New("unexpected signing method")
 			}
 			return []byte(a.config.jwtSecret), nil
-		})
+		}, jwt.WithIssuer(jwtIssuer), jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
 		if err != nil || !token.Valid {
 			respondError(w, http.StatusUnauthorized, "登录已失效")
 			return
@@ -296,7 +380,7 @@ func currentUserID(r *http.Request) int64 { id, _ := r.Context().Value(userIDKey
 
 func (a *app) me(w http.ResponseWriter, r *http.Request) {
 	var u user
-	err := a.db.QueryRowContext(r.Context(), "SELECT id, username, nickname FROM users WHERE id = ? AND status = 'active'", currentUserID(r)).Scan(&u.ID, &u.Username, &u.Nickname)
+	err := a.db.QueryRowContext(r.Context(), "SELECT id, soccer_user_id, username_snapshot, nickname_snapshot FROM platform_users WHERE id = ? AND status = 'active'", currentUserID(r)).Scan(&u.ID, &u.SoccerUserID, &u.Username, &u.Nickname)
 	if err != nil {
 		respondError(w, http.StatusUnauthorized, "账号不可用")
 		return

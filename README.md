@@ -2,13 +2,16 @@
 
 面向 Windows 的实况足球 8 虚拟局域网对战平台。当前仓库包含 Go API、MySQL/Redis 开发环境，以及 Vue 3 + Tauri 客户端骨架。
 
+项目进度和后续计划见：[PROJECT_STATUS.md](./PROJECT_STATUS.md)
+
 ## 当前阶段
 
-- 账号注册和登录
+- Laravel/Soccer 账号校验和平台 JWT 登录
 - 固定对战房间
 - 房间容量统计
 - 进入房间后事务化分配虚拟 IP
 - 退出房间释放 IP
+- 在线租约心跳续期和失联自动回收
 - SoftEther 连接凭据下发适配层
 - Windows 游戏路径选择和启动命令
 

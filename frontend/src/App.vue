@@ -180,7 +180,7 @@ onBeforeUnmount(stopLeaseHeartbeat)
       <h1>WEL职业联盟对战平台</h1>
       <form @submit.prevent="authenticate">
         <label>账号<input v-model.trim="form.username" autocomplete="username" placeholder="3 至 32 位账号" required /></label>
-        <label>密码<input v-model="form.password" type="password" autocomplete="current-password" placeholder="至少 8 位" minlength="8" required /></label>
+        <label>密码<input v-model="form.password" type="password" autocomplete="current-password" placeholder="至少 6 位" minlength="6" required /></label>
         <p v-if="errorMessage" class="form-error">{{ errorMessage }}</p>
         <button class="primary-button" :disabled="loading">{{ loading ? '处理中...' : '登录平台' }}</button>
       </form>

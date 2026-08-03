@@ -1,16 +1,16 @@
 SET NAMES utf8mb4;
 
-CREATE TABLE users (
+CREATE TABLE platform_users (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  username VARCHAR(32) NOT NULL,
-  password_hash VARCHAR(255) NOT NULL,
-  nickname VARCHAR(32) NOT NULL,
+  soccer_user_id BIGINT UNSIGNED NULL,
+  username_snapshot VARCHAR(255) NOT NULL,
+  nickname_snapshot VARCHAR(255) NOT NULL,
   status ENUM('active', 'disabled') NOT NULL DEFAULT 'active',
+  last_login_at DATETIME NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
-  UNIQUE KEY users_username_unique (username),
-  UNIQUE KEY users_nickname_unique (nickname)
+  UNIQUE KEY platform_users_soccer_user_id_unique (soccer_user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE rooms (
@@ -47,7 +47,7 @@ CREATE TABLE room_ip_leases (
   UNIQUE KEY room_ip_leases_room_ip_unique (room_id, virtual_ip),
   UNIQUE KEY room_ip_leases_active_user (room_id, user_id),
   CONSTRAINT room_ip_leases_room_id_foreign FOREIGN KEY (room_id) REFERENCES rooms (id),
-  CONSTRAINT room_ip_leases_user_id_foreign FOREIGN KEY (user_id) REFERENCES users (id),
+  CONSTRAINT room_ip_leases_user_id_foreign FOREIGN KEY (user_id) REFERENCES platform_users (id),
   KEY room_ip_leases_user_id_index (user_id),
   KEY room_ip_leases_state_index (state)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
