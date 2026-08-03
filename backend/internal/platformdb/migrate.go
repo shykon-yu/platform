@@ -7,7 +7,10 @@ import (
 	"regexp"
 )
 
-const soccerIdentityMigration = "20260803_soccer_identity"
+const (
+	soccerIdentityMigration = "20260803_soccer_identity"
+	sixRoomsMigration       = "20260803_limit_rooms_to_six"
+)
 
 var safeIdentifier = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
 
@@ -20,19 +23,29 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("create platform migrations table: %w", err)
 	}
 
+	if err := runMigration(ctx, db, soccerIdentityMigration, migrateSoccerIdentity); err != nil {
+		return err
+	}
+	if err := runMigration(ctx, db, sixRoomsMigration, migrateLimitRoomsToSix); err != nil {
+		return err
+	}
+	return nil
+}
+
+func runMigration(ctx context.Context, db *sql.DB, version string, migrate func(context.Context, *sql.DB) error) error {
 	var applied int
-	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM platform_schema_migrations WHERE version = ?", soccerIdentityMigration).Scan(&applied); err != nil {
-		return fmt.Errorf("check soccer identity migration: %w", err)
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM platform_schema_migrations WHERE version = ?", version).Scan(&applied); err != nil {
+		return fmt.Errorf("check migration %s: %w", version, err)
 	}
 	if applied > 0 {
 		return nil
 	}
 
-	if err := migrateSoccerIdentity(ctx, db); err != nil {
+	if err := migrate(ctx, db); err != nil {
 		return err
 	}
-	if _, err := db.ExecContext(ctx, "INSERT IGNORE INTO platform_schema_migrations (version) VALUES (?)", soccerIdentityMigration); err != nil {
-		return fmt.Errorf("record soccer identity migration: %w", err)
+	if _, err := db.ExecContext(ctx, "INSERT IGNORE INTO platform_schema_migrations (version) VALUES (?)", version); err != nil {
+		return fmt.Errorf("record migration %s: %w", version, err)
 	}
 	return nil
 }
@@ -97,6 +110,27 @@ func migrateSoccerIdentity(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
+func migrateLimitRoomsToSix(ctx context.Context, db *sql.DB) error {
+	hasSortOrder, err := columnExists(ctx, db, "rooms", "sort_order")
+	if err != nil {
+		return err
+	}
+	if !hasSortOrder {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, `
+		DELETE room_ip_leases
+		FROM room_ip_leases
+		INNER JOIN rooms ON rooms.id = room_ip_leases.room_id
+		WHERE rooms.sort_order > 6`); err != nil {
+		return fmt.Errorf("delete leases for hidden rooms: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, "DELETE FROM rooms WHERE sort_order > 6"); err != nil {
+		return fmt.Errorf("delete hidden rooms: %w", err)
+	}
+	return nil
+}
+
 func tableExists(ctx context.Context, db *sql.DB, table string) (bool, error) {
 	var count int
 	err := db.QueryRowContext(ctx, `
@@ -105,6 +139,18 @@ func tableExists(ctx context.Context, db *sql.DB, table string) (bool, error) {
 		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`, table).Scan(&count)
 	if err != nil {
 		return false, fmt.Errorf("check table %s: %w", table, err)
+	}
+	return count > 0, nil
+}
+
+func columnExists(ctx context.Context, db *sql.DB, table, column string) (bool, error) {
+	var count int
+	err := db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM information_schema.COLUMNS
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`, table, column).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("check column %s.%s: %w", table, column, err)
 	}
 	return count > 0, nil
 }

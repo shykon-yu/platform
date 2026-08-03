@@ -19,9 +19,9 @@ SOFTETHER_VPNCMD_PATH=/usr/local/bin/vpncmd
 
 API 容器需要挂载与 VPN Server 版本一致的 `vpncmd` Linux 可执行文件。管理端口只允许 API 所在的私网地址访问，不能暴露给公网。
 
-当前一台 SoftEther Server 承载 12 个 Virtual Hub，每个房间限制 100 人，总容量 1200：
+当前一台 SoftEther Server 承载 6 个 Virtual Hub，每个房间限制 100 人，总容量 600：
 
-- `we8-room-01` 至 `we8-room-12`
+- `we8-room-01` 至 `we8-room-06`
 
 这些 Hub 目前都指向同一个 `SOFTETHER_CLIENT_HOST`。部署前需要在 SoftEther Server 创建全部同名 Virtual Hub；以后增加服务器时再给房间增加节点归属和独立连接地址。
 
