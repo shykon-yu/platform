@@ -73,7 +73,7 @@ func (p *vpncmdProvisioner) Provision(ctx context.Context, credential Credential
 		_ = p.command(ctx, credential.Hub, "UserDelete", credential.Username)
 		return err
 	}
-	expires := credential.ExpiresAt.UTC().Format("2006/01/02_15:04:05")
+	expires := softEtherExpiresAt(credential.ExpiresAt)
 	if err := p.command(ctx, credential.Hub, "UserExpiresSet", credential.Username, "/EXPIRES:"+expires); err != nil {
 		_ = p.command(ctx, credential.Hub, "UserDelete", credential.Username)
 		return err
@@ -92,8 +92,12 @@ func (p *vpncmdProvisioner) Renew(ctx context.Context, hub, username string, exp
 	if !safeIdentifier.MatchString(hub) || !safeIdentifier.MatchString(username) {
 		return errors.New("invalid SoftEther hub or username")
 	}
-	expires := expiresAt.UTC().Format("2006/01/02_15:04:05")
+	expires := softEtherExpiresAt(expiresAt)
 	return p.command(ctx, hub, "UserExpiresSet", username, "/EXPIRES:"+expires)
+}
+
+func softEtherExpiresAt(expiresAt time.Time) string {
+	return expiresAt.UTC().Format("2006/01/02 15:04:05")
 }
 
 func (p *vpncmdProvisioner) command(ctx context.Context, hub, command string, args ...string) error {

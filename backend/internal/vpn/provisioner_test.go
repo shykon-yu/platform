@@ -48,7 +48,7 @@ func TestVPNCmdRenewOnlyUpdatesExpiration(t *testing.T) {
 		t.Fatalf("Renew() error = %v", err)
 	}
 	command := strings.Join(arguments, " ")
-	if !strings.Contains(command, "/CMD UserExpiresSet room-1-user-2 /EXPIRES:2026/08/03_12:30:00") {
+	if !strings.Contains(command, "/CMD UserExpiresSet room-1-user-2 /EXPIRES:2026/08/03 12:30:00") {
 		t.Fatalf("Renew() arguments = %q", command)
 	}
 	if strings.Contains(command, "UserDelete") || strings.Contains(command, "UserCreate") {
