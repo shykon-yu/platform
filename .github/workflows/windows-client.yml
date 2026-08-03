@@ -50,6 +50,7 @@ jobs:
       - name: Generate Cargo.lock
         run: |
           cargo generate-lockfile --manifest-path src-tauri/Cargo.toml
+          cargo update --manifest-path src-tauri/Cargo.toml -p 'plist@1.10.0' --precise 1.7.0
           cargo update --manifest-path src-tauri/Cargo.toml -p 'time@0.3.55' --precise 0.3.36
           cargo update --manifest-path src-tauri/Cargo.toml -p 'time-core@0.1.9' --precise 0.1.2
           cargo update --manifest-path src-tauri/Cargo.toml -p 'time-macros@0.2.32' --precise 0.2.18
