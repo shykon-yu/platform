@@ -1,5 +1,5 @@
 {
-  "name": "pes8-platform-client",
+  "name": "we8-platform-client",
   "private": true,
   "version": "0.1.1",
   "packageManager": "pnpm@11.11.0",

@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    pes8_platform_lib::run();
+    we8_platform_lib::run();
 }

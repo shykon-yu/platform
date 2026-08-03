@@ -12,7 +12,9 @@ const loading = ref(false)
 const errorMessage = ref('')
 const notice = ref('')
 const form = ref({ username: '', password: '' })
-const gamePath = ref(localStorage.getItem('pes8.game-path') ?? '')
+const GAME_PATH_KEY = 'we8.game-path'
+const LEGACY_GAME_PATH_KEY = 'pes8.game-path'
+const gamePath = ref(localStorage.getItem(GAME_PATH_KEY) ?? localStorage.getItem(LEGACY_GAME_PATH_KEY) ?? '')
 const totalOnline = computed(() => rooms.value.reduce((total, room) => total + room.members, 0))
 const isTauri = () => Boolean((window as unknown as Record<string, unknown>).__TAURI_INTERNALS__)
 const heartbeatIntervalMs = 5 * 60 * 1000
@@ -137,7 +139,11 @@ async function leaveRoom() {
   } catch (error) { errorMessage.value = messageOf(error) } finally { loading.value = false }
 }
 
-function saveGamePath() { localStorage.setItem('pes8.game-path', gamePath.value); notice.value = '游戏路径已保存' }
+function saveGamePath() {
+  localStorage.setItem(GAME_PATH_KEY, gamePath.value)
+  localStorage.removeItem(LEGACY_GAME_PATH_KEY)
+  notice.value = '游戏路径已保存'
+}
 async function chooseGame() {
   if (!(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__) { notice.value = '浏览器预览中请直接输入路径'; return }
   const selected = await open({ title: '选择 WE8 游戏程序', multiple: false, filters: [{ name: 'Windows 程序', extensions: ['exe'] }] })

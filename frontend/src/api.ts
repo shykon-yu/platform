@@ -1,11 +1,13 @@
 const apiBase = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080/api/v1'
+const ACCESS_TOKEN_KEY = 'we8.access-token'
+const LEGACY_ACCESS_TOKEN_KEY = 'pes8.access-token'
 
 export type User = { id: number; username: string; nickname: string }
 export type Room = { id: number; code: string; name: string; region: string; subnet_cidr: string; capacity: number; members: number; status: 'open' | 'maintenance' | 'closed' }
 export type Lease = { room_id: number; virtual_ip: string; username: string; password?: string; hub_name: string; subnet_cidr: string; expires_at: string; server_host: string; server_port: number }
 
 type SessionResponse = { token: string; user: User }
-let token = localStorage.getItem('pes8.access-token') ?? ''
+let token = localStorage.getItem(ACCESS_TOKEN_KEY) ?? localStorage.getItem(LEGACY_ACCESS_TOKEN_KEY) ?? ''
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) {
@@ -16,12 +18,14 @@ export class ApiError extends Error {
 
 export function setToken(value: string) {
   token = value
-  localStorage.setItem('pes8.access-token', value)
+  localStorage.setItem(ACCESS_TOKEN_KEY, value)
+  localStorage.removeItem(LEGACY_ACCESS_TOKEN_KEY)
 }
 
 export function clearToken() {
   token = ''
-  localStorage.removeItem('pes8.access-token')
+  localStorage.removeItem(ACCESS_TOKEN_KEY)
+  localStorage.removeItem(LEGACY_ACCESS_TOKEN_KEY)
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {

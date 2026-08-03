@@ -3,13 +3,16 @@ use std::process::{Command, Output};
 use tauri::Manager;
 
 const DEFAULT_NIC_NAME: &str = "VPN";
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[tauri::command]
 fn launch_game(path: String) -> Result<(), String> {
     if path.trim().is_empty() {
         return Err("请先选择 WE8 游戏程序".into());
     }
-    Command::new(path).spawn().map_err(|error| format!("无法启动游戏：{error}"))?;
+    let mut command = Command::new(path);
+    spawn_command(&mut command).map_err(|error| format!("无法启动游戏：{error}"))?;
     Ok(())
 }
 
@@ -198,10 +201,9 @@ fn locate_vpncmd() -> Result<PathBuf, String> {
 }
 
 fn run_vpncmd(vpncmd: &Path, args: &[&str]) -> Result<Output, String> {
-    let output = Command::new(vpncmd)
-        .args(args)
-        .output()
-        .map_err(|error| format!("无法启动 SoftEther 客户端：{error}"))?;
+    let mut command = Command::new(vpncmd);
+    command.args(args);
+    let output = output_command(&mut command).map_err(|error| format!("无法启动 SoftEther 客户端：{error}"))?;
     if !output.status.success() {
         let command = args
             .windows(2)
@@ -221,6 +223,30 @@ fn run_vpncmd(vpncmd: &Path, args: &[&str]) -> Result<Output, String> {
         });
     }
     Ok(output)
+}
+
+#[cfg(target_os = "windows")]
+fn output_command(command: &mut Command) -> std::io::Result<Output> {
+    use std::os::windows::process::CommandExt;
+
+    command.creation_flags(CREATE_NO_WINDOW).output()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn output_command(command: &mut Command) -> std::io::Result<Output> {
+    command.output()
+}
+
+#[cfg(target_os = "windows")]
+fn spawn_command(command: &mut Command) -> std::io::Result<std::process::Child> {
+    use std::os::windows::process::CommandExt;
+
+    command.creation_flags(CREATE_NO_WINDOW).spawn()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn spawn_command(command: &mut Command) -> std::io::Result<std::process::Child> {
+    command.spawn()
 }
 
 pub fn run() {
