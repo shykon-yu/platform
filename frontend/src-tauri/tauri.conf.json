@@ -13,5 +13,16 @@
     "windows": [{ "title": "WEL职业联盟对战平台", "width": 1180, "height": 760, "minWidth": 900, "minHeight": 620, "resizable": true }],
     "security": { "csp": null }
   },
-  "bundle": { "active": true, "targets": ["nsis", "msi"], "windows": { "nsis": { "installMode": "perMachine" } } }
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": { "nsis": { "installMode": "perMachine" } }
+  }
 }

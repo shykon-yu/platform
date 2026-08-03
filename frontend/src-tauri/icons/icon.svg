@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="128" y1="64" x2="896" y2="960" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0b1720"/>
+      <stop offset="0.52" stop-color="#12324a"/>
+      <stop offset="1" stop-color="#102017"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="146" y1="116" x2="880" y2="914" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#35d5ff"/>
+      <stop offset="0.48" stop-color="#f7d64a"/>
+      <stop offset="1" stop-color="#27d07d"/>
+    </linearGradient>
+    <linearGradient id="letters" x1="212" y1="320" x2="814" y2="704" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.58" stop-color="#d9f5ff"/>
+      <stop offset="1" stop-color="#ffe071"/>
+    </linearGradient>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="28" stdDeviation="30" flood-color="#000000" flood-opacity="0.38"/>
+    </filter>
+  </defs>
+
+  <rect x="64" y="64" width="896" height="896" rx="212" fill="url(#bg)"/>
+  <rect x="92" y="92" width="840" height="840" rx="188" fill="none" stroke="url(#edge)" stroke-width="34"/>
+  <text x="512" y="650" text-anchor="middle" fill="url(#letters)" filter="url(#shadow)"
+        font-family="Arial Black, Impact, sans-serif" font-size="342" font-style="italic" font-weight="900">WEL</text>
+  <path d="M248 746H764" stroke="#35d5ff" stroke-width="28" stroke-linecap="round"/>
+  <path d="M302 790H708" stroke="#f7d64a" stroke-width="18" stroke-linecap="round"/>
+</svg>
