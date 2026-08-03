@@ -50,6 +50,13 @@ jobs:
       - name: Generate Cargo.lock
         run: |
           cargo generate-lockfile --manifest-path src-tauri/Cargo.toml
+          cargo update --manifest-path src-tauri/Cargo.toml -p cargo_toml --precise 0.17.2
+          cargo update --manifest-path src-tauri/Cargo.toml -p toml --precise 0.8.19
+          cargo update --manifest-path src-tauri/Cargo.toml -p toml_edit --precise 0.22.22
+          cargo update --manifest-path src-tauri/Cargo.toml -p toml_datetime --precise 0.6.8
+          cargo update --manifest-path src-tauri/Cargo.toml -p serde_spanned --precise 0.6.8
+          cargo update --manifest-path src-tauri/Cargo.toml -p zeroize --precise 1.8.1
+          cargo update --manifest-path src-tauri/Cargo.toml -p zeroize_derive --precise 1.4.2
           $lockVersion = Select-String -Path src-tauri/Cargo.lock -Pattern '^version = ' | Select-Object -First 1
           Write-Host $lockVersion.Line
           if ($lockVersion.Line -ne 'version = 3') {
