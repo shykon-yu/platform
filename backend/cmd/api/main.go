@@ -100,8 +100,9 @@ type lease struct {
 }
 
 const (
-	jwtIssuer = "pes8-platform"
-	leaseTTL  = 30 * time.Minute
+	jwtIssuer         = "pes8-platform"
+	defaultCORSOrigin = "http://localhost:1420,http://localhost:5173,http://tauri.localhost,https://tauri.localhost,tauri://localhost"
+	leaseTTL          = 30 * time.Minute
 )
 
 func main() {
@@ -174,7 +175,7 @@ func loadConfig() config {
 		return fallback
 	}
 	origins := map[string]bool{}
-	for _, origin := range strings.Split(getenv("CORS_ORIGIN", "http://localhost:1420"), ",") {
+	for _, origin := range strings.Split(getenv("CORS_ORIGIN", defaultCORSOrigin), ",") {
 		origins[strings.TrimSpace(origin)] = true
 	}
 	return config{

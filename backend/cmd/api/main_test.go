@@ -123,3 +123,12 @@ func TestAuthRequiresPlatformIssuer(t *testing.T) {
 		t.Fatalf("legacy token status = %d, want %d", legacyResponse.Code, http.StatusUnauthorized)
 	}
 }
+
+func TestDefaultCORSOriginsIncludeTauriWindows(t *testing.T) {
+	t.Setenv("CORS_ORIGIN", "")
+
+	cfg := loadConfig()
+	if !aOriginAllowed(cfg, "http://tauri.localhost") {
+		t.Fatal("default CORS origins do not allow the Windows Tauri webview")
+	}
+}

@@ -44,7 +44,7 @@ services:
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-redis-dev-password}
       JWT_SECRET: ${JWT_SECRET:-local-development-secret-change-before-production}
-      CORS_ORIGIN: http://localhost:1420,http://localhost:5173
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:1420,http://localhost:5173,http://tauri.localhost,https://tauri.localhost,tauri://localhost}
       SOFTETHER_MODE: mock
       SOFTETHER_CLIENT_HOST: ${SOFTETHER_CLIENT_HOST:-pending-softether-host}
       SOFTETHER_CLIENT_PORT: ${SOFTETHER_CLIENT_PORT:-443}
