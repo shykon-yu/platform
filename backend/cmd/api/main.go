@@ -29,12 +29,12 @@ import (
 )
 
 type config struct {
-	port, mysqlDSN, redisAddr, redisPassword, jwtSecret string
-	soccerAuthURL                                       string
-	corsOrigins                                         map[string]bool
-	softEtherMode, vpncmdPath, softEtherAdminEndpoint   string
-	softEtherAdminPassword, softEtherClientHost         string
-	softEtherClientPort                                 int
+	port, mysqlDSN, soccerMySQLDSN, redisAddr, redisPassword string
+	jwtSecret, soccerAuthURL                                 string
+	corsOrigins                                              map[string]bool
+	softEtherMode, vpncmdPath, softEtherAdminEndpoint        string
+	softEtherAdminPassword, softEtherClientHost              string
+	softEtherClientPort                                      int
 }
 
 type app struct {
@@ -126,6 +126,20 @@ func main() {
 		logger.Error("migrate platform database", "error", err)
 		os.Exit(1)
 	}
+	if cfg.soccerMySQLDSN != "" {
+		soccerDB, err := sql.Open("mysql", cfg.soccerMySQLDSN)
+		if err != nil {
+			logger.Error("open soccer database", "error", err)
+			os.Exit(1)
+		}
+		defer soccerDB.Close()
+		count, err := syncSoccerUsers(ctx, db, soccerDB)
+		if err != nil {
+			logger.Error("sync soccer users", "error", err)
+			os.Exit(1)
+		}
+		logger.Info("synced soccer users", "count", count)
+	}
 
 	redisClient := redis.NewClient(&redis.Options{Addr: cfg.redisAddr, Password: cfg.redisPassword})
 	if err := redisClient.Ping(ctx).Err(); err != nil {
@@ -180,7 +194,8 @@ func loadConfig() config {
 	}
 	return config{
 		port: getenv("API_PORT", "8080"), mysqlDSN: getenv("MYSQL_DSN", "pes8:pes8-dev-password@tcp(localhost:3306)/pes8_platform?parseTime=true&charset=utf8mb4&loc=Local"),
-		redisAddr: getenv("REDIS_ADDR", "localhost:6379"), redisPassword: getenv("REDIS_PASSWORD", "redis-dev-password"),
+		soccerMySQLDSN: getenv("SOCCER_MYSQL_DSN", ""),
+		redisAddr:      getenv("REDIS_ADDR", "localhost:6379"), redisPassword: getenv("REDIS_PASSWORD", "redis-dev-password"),
 		jwtSecret: getenv("JWT_SECRET", "local-development-secret-change-before-production"), corsOrigins: origins,
 		soccerAuthURL: getenv("SOCCER_AUTH_URL", "http://localhost/api/v1/auth/login"),
 		softEtherMode: getenv("SOFTETHER_MODE", "mock"), vpncmdPath: getenv("SOFTETHER_VPNCMD_PATH", "/usr/local/bin/vpncmd"),
@@ -290,6 +305,56 @@ func (a *app) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.respondSession(w, u)
+}
+
+func syncSoccerUsers(ctx context.Context, platformDB, soccerDB *sql.DB) (int, error) {
+	rows, err := soccerDB.QueryContext(ctx, `
+		SELECT
+			id,
+			username,
+			COALESCE(NULLIF(nickname, ''), username) AS nickname,
+			CAST(status AS CHAR) AS status
+		FROM users`)
+	if err != nil {
+		return 0, fmt.Errorf("query soccer users: %w", err)
+	}
+	defer rows.Close()
+
+	tx, err := platformDB.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin platform user sync: %w", err)
+	}
+	defer tx.Rollback()
+
+	count := 0
+	for rows.Next() {
+		var soccerUserID int64
+		var username, nickname, status string
+		if err := rows.Scan(&soccerUserID, &username, &nickname, &status); err != nil {
+			return 0, fmt.Errorf("scan soccer user: %w", err)
+		}
+		platformStatus := "disabled"
+		if status == "1" || strings.EqualFold(status, "active") {
+			platformStatus = "active"
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO platform_users (soccer_user_id, username_snapshot, nickname_snapshot, status)
+			VALUES (?, ?, ?, ?)
+			ON DUPLICATE KEY UPDATE
+				username_snapshot = VALUES(username_snapshot),
+				nickname_snapshot = VALUES(nickname_snapshot),
+				status = VALUES(status)`, soccerUserID, username, nickname, platformStatus); err != nil {
+			return 0, fmt.Errorf("upsert platform user %d: %w", soccerUserID, err)
+		}
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("read soccer users: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit platform user sync: %w", err)
+	}
+	return count, nil
 }
 
 func (a *app) authenticateWithSoccer(ctx context.Context, username, password string) (user, bool, error) {
