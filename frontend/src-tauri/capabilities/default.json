@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Default permissions for the WE8 desktop client",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open", "opener:default"]
+  "permissions": ["core:default", "opener:default"]
 }

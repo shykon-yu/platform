@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { open } from '@tauri-apps/plugin-dialog'
 import { Gamepad2, LogOut, MonitorCog, Play, RefreshCw, Router, ShieldCheck, Users } from 'lucide-vue-next'
 import { ApiError, authApi, clearToken, roomApi, setToken, type Lease, type Room, type User } from './api'
 
@@ -145,9 +144,7 @@ function saveGamePath() {
   notice.value = '游戏路径已保存'
 }
 async function chooseGame() {
-  if (!(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__) { notice.value = '浏览器预览中请直接输入路径'; return }
-  const selected = await open({ title: '选择 WE8 游戏程序', multiple: false, filters: [{ name: 'Windows 程序', extensions: ['exe'] }] })
-  if (typeof selected === 'string') { gamePath.value = selected; saveGamePath() }
+  notice.value = '请在输入框中填写 WE8 主程序完整路径'
 }
 async function launchGame() {
   errorMessage.value = ''

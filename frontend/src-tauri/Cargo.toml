@@ -7,6 +7,7 @@ edition = "2021"
 rust-version = "1.77.2"
 
 [build-dependencies]
+cargo_toml = "=0.17.2"
 tauri-build = { version = "=2.0.0", features = [] }
 
 [lib]
@@ -21,5 +22,9 @@ path = "src/main.rs"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "=2.0.0", features = [] }
-tauri-plugin-dialog = "=2.0.0"
+tauri-codegen = "=2.0.0"
+tauri-macros = "=2.0.0"
 tauri-plugin-opener = "=2.0.0"
+tauri-runtime = "=2.0.0"
+tauri-runtime-wry = "=2.0.0"
+tauri-utils = "=2.0.0"
