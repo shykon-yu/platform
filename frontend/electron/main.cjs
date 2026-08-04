@@ -147,8 +147,47 @@ ipcMain.handle('disconnect-vpn', async (_event, username) => {
 
 ipcMain.handle('launch-game', async (_event, gamePath) => {
   if (!gamePath || !gamePath.trim()) throw new Error('请先选择 WE8 游戏程序')
-  const child = spawn(gamePath, [], { detached: true, windowsHide: true, stdio: 'ignore' })
-  child.unref()
+
+  const normalizedPath = path.normalize(gamePath.trim().replace(/^"(.*)"$/, '$1'))
+  if (!fs.existsSync(normalizedPath)) {
+    throw new Error(`找不到 WE8 游戏程序：${normalizedPath}`)
+  }
+
+  const stat = fs.statSync(normalizedPath)
+  if (!stat.isFile()) {
+    throw new Error('选择的 WE8 路径不是可执行文件')
+  }
+
+  if (process.platform === 'win32') {
+    // Shell launch avoids EACCES from direct spawn on some Windows 11
+    // installations and preserves support for non-ASCII game paths.
+    return new Promise((resolve, reject) => {
+      const child = spawn(
+        'cmd.exe',
+        ['/d', '/c', 'start', '""', normalizedPath],
+        { detached: true, windowsHide: true, stdio: 'ignore' },
+      )
+      child.once('error', (error) => reject(new Error(`无法启动 WE8：${error.message}`)))
+      child.once('spawn', () => {
+        child.unref()
+        resolve()
+      })
+    })
+  }
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(normalizedPath, [], {
+      cwd: path.dirname(normalizedPath),
+      detached: true,
+      windowsHide: true,
+      stdio: 'ignore',
+    })
+    child.once('error', (error) => reject(new Error(`无法启动 WE8：${error.message}`)))
+    child.once('spawn', () => {
+      child.unref()
+      resolve()
+    })
+  })
 })
 
 ipcMain.handle('choose-game', async (event) => {
