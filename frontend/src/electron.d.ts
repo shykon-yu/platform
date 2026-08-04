@@ -11,6 +11,7 @@ declare global {
   interface Window {
     we8Desktop?: {
       connectVpn: (lease: DesktopLease) => Promise<void>
+      ensureSoftEther: () => Promise<boolean>
       disconnectVpn: (username: string) => Promise<void>
       chooseGame: () => Promise<string | null>
       launchGame: (gamePath: string) => Promise<void>

@@ -4,6 +4,7 @@
 .pnpm-store/
 **/node_modules/
 **/dist/
+frontend/resources/softether/
 **/target/
 **/Cargo.lock
 !frontend/src-tauri/Cargo.lock

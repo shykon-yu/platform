@@ -33,6 +33,50 @@ function locateVpncmd() {
   return existing || 'vpncmd.exe'
 }
 
+function locateInstalledVpncmd() {
+  const vpncmd = locateVpncmd()
+  return vpncmd === 'vpncmd.exe' ? null : vpncmd
+}
+
+function locateSoftEtherInstaller() {
+  const fileName = 'softether-vpnclient-v4.42-9798-rtm-2023.06.30-windows-x86_x64-intel.exe'
+  const candidates = [
+    path.join(process.resourcesPath, 'softether', fileName),
+    path.join(__dirname, '..', 'resources', 'softether', fileName),
+  ]
+  return candidates.find((candidate) => fs.existsSync(candidate)) || null
+}
+
+function runElevatedInstaller(installer) {
+  return new Promise((resolve, reject) => {
+    const child = spawn('powershell.exe', [
+      '-NoProfile',
+      '-ExecutionPolicy', 'Bypass',
+      '-Command',
+      `Start-Process -FilePath '${installer.replaceAll("'", "''")}' -Verb RunAs -Wait`,
+    ], { windowsHide: true, windowsVerbatimArguments: false })
+    let stderr = ''
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString() })
+    child.on('error', (error) => reject(`无法启动 SoftEther 安装程序：${error.message}`))
+    child.on('close', (code) => {
+      if (code === 0) return resolve()
+      reject(stderr.trim() || 'SoftEther 安装未完成')
+    })
+  })
+}
+
+async function ensureSoftEther() {
+  if (process.platform !== 'win32') throw new Error('SoftEther 自动安装仅支持 Windows 客户端')
+  const installed = locateInstalledVpncmd()
+  if (installed) return installed
+  const installer = locateSoftEtherInstaller()
+  if (!installer) throw new Error('客户端未找到 SoftEther 安装包，请重新下载完整安装包')
+  await runElevatedInstaller(installer)
+  const afterInstall = locateInstalledVpncmd()
+  if (!afterInstall) throw new Error('SoftEther 安装完成，但未找到 VPN Client，请重启客户端后重试')
+  return afterInstall
+}
+
 function runVpncmd(args) {
   return new Promise((resolve, reject) => {
     const child = spawn(locateVpncmd(), args, { windowsHide: true, windowsVerbatimArguments: false })
@@ -90,6 +134,7 @@ ipcMain.handle('connect-vpn', async (_event, lease) => {
   validateIdentifier(lease.hub, '虚拟 HUB')
   validateIdentifier(lease.username, 'VPN 用户名')
   if (!lease.host || !lease.password || !lease.port) throw new Error('VPN 连接参数不完整')
+  await ensureSoftEther()
   const nic = await resolveNic(lease.nicName)
   const account = `WEL-${lease.username}`
   const server = `${lease.host}:${lease.port}`
@@ -97,6 +142,11 @@ ipcMain.handle('connect-vpn', async (_event, lease) => {
   await runVpncmd(['localhost', '/CLIENT', '/CMD', 'AccountCreate', account, `/SERVER:${server}`, `/HUB:${lease.hub}`, `/USERNAME:${lease.username}`, `/NICNAME:${nic}`])
   await runVpncmd(['localhost', '/CLIENT', '/CMD', 'AccountPasswordSet', account, `/PASSWORD:${lease.password}`, '/TYPE:standard'])
   await runVpncmd(['localhost', '/CLIENT', '/CMD', 'AccountConnect', account])
+})
+
+ipcMain.handle('ensure-softether', async () => {
+  await ensureSoftEther()
+  return true
 })
 
 ipcMain.handle('disconnect-vpn', async (_event, username) => {
