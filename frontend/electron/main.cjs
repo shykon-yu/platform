@@ -5,6 +5,8 @@ const path = require('node:path')
 
 const DEFAULT_NIC = 'VPN'
 const API_URL = process.env.VITE_API_BASE_URL || 'http://www.jingzhu.top:8082/api/v1'
+const FIREWALL_RULE_NAME = 'WEL WE8 Virtual LAN ICMPv4'
+const VIRTUAL_NETWORK = '10.80.0.0/16'
 
 function createWindow() {
   const window = new BrowserWindow({
@@ -63,6 +65,53 @@ function runElevatedInstaller(installer) {
       reject(stderr.trim() || 'SoftEther 安装未完成')
     })
   })
+}
+
+function runElevatedProcess(file, args) {
+  return new Promise((resolve, reject) => {
+    const encodedArgs = args.map((value) => `'${String(value).replaceAll("'", "''")}'`).join(',')
+    const command = `Start-Process -FilePath '${file.replaceAll("'", "''")}' -ArgumentList @(${encodedArgs}) -Verb RunAs -Wait`
+    const child = spawn('powershell.exe', [
+      '-NoProfile',
+      '-ExecutionPolicy', 'Bypass',
+      '-Command',
+      command,
+    ], { windowsHide: true, windowsVerbatimArguments: false })
+    let stderr = ''
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString() })
+    child.on('error', (error) => reject(error))
+    child.on('close', (code) => {
+      if (code === 0) return resolve()
+      reject(new Error(stderr.trim() || `${file} 执行失败`))
+    })
+  })
+}
+
+function firewallRuleExists() {
+  return new Promise((resolve) => {
+    const child = spawn('netsh.exe', [
+      'advfirewall', 'firewall', 'show', 'rule', `name=${FIREWALL_RULE_NAME}`,
+    ], { windowsHide: true })
+    let output = ''
+    child.stdout.on('data', (chunk) => { output += chunk.toString() })
+    child.stderr.on('data', (chunk) => { output += chunk.toString() })
+    child.on('close', () => resolve(output.includes(FIREWALL_RULE_NAME)))
+    child.on('error', () => resolve(false))
+  })
+}
+
+async function ensureFirewallRule() {
+  if (process.platform !== 'win32' || await firewallRuleExists()) return
+  await runElevatedProcess('netsh.exe', [
+    'advfirewall', 'firewall', 'add', 'rule',
+    `name=${FIREWALL_RULE_NAME}`,
+    'dir=in',
+    'action=allow',
+    'protocol=icmpv4:8,any',
+    `remoteip=${VIRTUAL_NETWORK}`,
+    'profile=any',
+    'enable=yes',
+  ])
 }
 
 async function ensureSoftEther() {
@@ -135,6 +184,7 @@ ipcMain.handle('connect-vpn', async (_event, lease) => {
   validateIdentifier(lease.username, 'VPN 用户名')
   if (!lease.host || !lease.password || !lease.port) throw new Error('VPN 连接参数不完整')
   await ensureSoftEther()
+  await ensureFirewallRule()
   const nic = await resolveNic(lease.nicName)
   const account = `WEL-${lease.username}`
   const server = `${lease.host}:${lease.port}`
@@ -146,6 +196,11 @@ ipcMain.handle('connect-vpn', async (_event, lease) => {
 
 ipcMain.handle('ensure-softether', async () => {
   await ensureSoftEther()
+  return true
+})
+
+ipcMain.handle('ensure-firewall-rule', async () => {
+  await ensureFirewallRule()
   return true
 })
 
