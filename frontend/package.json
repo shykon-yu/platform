@@ -32,6 +32,7 @@
       "perMachine": true,
       "allowElevation": true,
       "allowToChangeInstallationDirectory": true,
+      "shortcutName": "WEL职业联盟对战平台 v0.1.1",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
     }

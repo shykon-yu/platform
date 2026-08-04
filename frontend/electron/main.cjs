@@ -1,7 +1,8 @@
-const { app, BrowserWindow, dialog, ipcMain } = require('electron')
+const { app, BrowserWindow, Menu, dialog, ipcMain } = require('electron')
 const { spawn } = require('node:child_process')
 const fs = require('node:fs')
 const path = require('node:path')
+const { version: appVersion } = require('../package.json')
 
 const DEFAULT_NIC = 'VPN'
 const API_URL = process.env.VITE_API_BASE_URL || 'http://www.jingzhu.top:8082/api/v1'
@@ -12,7 +13,7 @@ function createWindow() {
     height: 760,
     minWidth: 900,
     minHeight: 620,
-    title: 'WEL职业联盟对战平台',
+    title: `WEL职业联盟对战平台 v${appVersion}`,
     backgroundColor: '#f4f7f6',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -22,6 +23,63 @@ function createWindow() {
   })
 
   window.loadFile(path.join(__dirname, '..', 'dist', 'index.html'))
+}
+
+function createChineseMenu() {
+  const template = [
+    {
+      label: '文件',
+      submenu: [
+        { role: 'reload', label: '重新载入' },
+        { role: 'forceReload', label: '强制重新载入' },
+        { type: 'separator' },
+        { role: 'quit', label: '退出' },
+      ],
+    },
+    {
+      label: '编辑',
+      submenu: [
+        { role: 'undo', label: '撤销' },
+        { role: 'redo', label: '重做' },
+        { type: 'separator' },
+        { role: 'cut', label: '剪切' },
+        { role: 'copy', label: '复制' },
+        { role: 'paste', label: '粘贴' },
+        { role: 'selectAll', label: '全选' },
+      ],
+    },
+    {
+      label: '查看',
+      submenu: [
+        { role: 'resetZoom', label: '实际大小' },
+        { role: 'zoomIn', label: '放大' },
+        { role: 'zoomOut', label: '缩小' },
+        { type: 'separator' },
+        { role: 'togglefullscreen', label: '全屏' },
+      ],
+    },
+    {
+      label: '窗口',
+      submenu: [
+        { role: 'minimize', label: '最小化' },
+        { role: 'close', label: '关闭' },
+      ],
+    },
+    {
+      label: '帮助',
+      submenu: [
+        {
+          label: '关于 WEL职业联盟对战平台',
+          click: () => dialog.showMessageBox({
+            type: 'info',
+            title: '关于',
+            message: `WEL职业联盟对战平台 v${appVersion}`,
+          }),
+        },
+      ],
+    },
+  ]
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
 
 function locateVpncmd() {
@@ -205,6 +263,7 @@ ipcMain.handle('choose-game', async (event) => {
 
 app.whenReady().then(() => {
   process.env.VITE_API_BASE_URL = API_URL
+  createChineseMenu()
   createWindow()
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
 })

@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { Gamepad2, LogOut, MonitorCog, Play, RefreshCw, Router, ShieldCheck, Users } from 'lucide-vue-next'
+import { FolderOpen, Gamepad2, LogOut, Play, RefreshCw, Router, ShieldCheck, Users } from 'lucide-vue-next'
 import { ApiError, authApi, clearToken, roomApi, setToken, type Lease, type Room, type User } from './api'
+
+const APP_VERSION = 'v0.1.1'
 
 type DesktopStatus = {
   admin: boolean
@@ -224,7 +226,7 @@ onBeforeUnmount(stopLeaseHeartbeat)
     <section class="auth-panel">
       <div class="brand-mark"><Gamepad2 :size="28" /></div>
       <p class="eyebrow">WE8 ONLINE ARENA</p>
-      <h1>WEL职业联盟对战平台</h1>
+      <h1>WEL职业联盟对战平台 <span class="app-version">{{ APP_VERSION }}</span></h1>
       <form @submit.prevent="authenticate">
         <label>账号<input v-model.trim="form.username" autocomplete="username" placeholder="3 至 32 位账号" required /></label>
         <label>密码<input v-model="form.password" type="password" autocomplete="current-password" placeholder="至少 6 位" minlength="6" required /></label>
@@ -236,10 +238,10 @@ onBeforeUnmount(stopLeaseHeartbeat)
 
   <main v-else class="app-shell">
     <aside class="sidebar">
-      <div class="sidebar-brand"><span class="brand-mark"><Gamepad2 :size="22" /></span><span>WE8 Arena</span></div>
+      <div class="sidebar-brand"><span class="brand-mark"><Gamepad2 :size="22" /></span><span>WE8 Arena <span class="app-version">{{ APP_VERSION }}</span></span></div>
       <div class="user-row"><span class="avatar">{{ user.nickname.slice(0, 1) }}</span><span><strong>{{ user.nickname }}</strong><small>@{{ user.username }}</small></span></div>
-      <nav><a class="active"><Users :size="18" /> 对战房间</a><a><MonitorCog :size="18" /> 游戏设置</a></nav>
-      <button class="logout" @click="logout"><LogOut :size="17" /> 退出登录</button>
+      <nav><a class="active"><Users :size="18" /> 对战房间</a></nav>
+      <div class="sidebar-actions"><button class="logout" @click="logout"><LogOut :size="17" /> 退出登录</button></div>
     </aside>
 
     <section class="content">
@@ -254,19 +256,18 @@ onBeforeUnmount(stopLeaseHeartbeat)
           <button class="secondary-button" @click="refreshDesktopStatus" :disabled="loading">重新检测</button>
         </div>
       </section>
-      <header class="topbar"><div><p class="eyebrow">游戏大厅</p><h2>选择一个对战房间</h2></div><div class="online"><span></span>{{ totalOnline }} 人在线</div></header>
+      <header class="topbar"><div><p class="eyebrow">游戏大厅</p><h2>选择一个对战房间</h2></div><div class="topbar-actions"><div class="online"><span></span>{{ totalOnline }} 人在线</div><button v-if="desktop()" class="icon-button" title="选择 WE8 游戏程序" @click="chooseGame"><FolderOpen :size="18" /></button></div></header>
       <p v-if="errorMessage" class="banner error">{{ errorMessage }}</p><p v-if="notice" class="banner notice">{{ notice }}</p>
 
       <section v-if="activeLease" class="connection-strip">
         <div><p class="eyebrow">当前已连接</p><h3>{{ activeLease.hub_name }}</h3><span><Router :size="15" /> {{ activeLease.virtual_ip }} / {{ activeLease.subnet_cidr }}</span></div>
-        <div class="connection-actions"><span class="secure"><ShieldCheck :size="17" /> 虚拟局域网已分配</span><button class="secondary-button" @click="leaveRoom" :disabled="loading">退出房间</button></div>
+        <div class="connection-actions"><span class="secure"><ShieldCheck :size="17" /> 虚拟局域网已分配</span><button class="primary-button launch" @click="launchGame"><Play :size="17" /> 启动 WE8</button><button class="secondary-button" @click="leaveRoom" :disabled="loading">退出房间</button></div>
       </section>
 
       <section class="room-section"><div class="section-heading"><h3>可用房间</h3><button class="icon-button" title="刷新房间" @click="loadRooms" :disabled="loading"><RefreshCw :size="18" :class="{ spinning: loading }" /></button></div>
         <div class="room-grid"><article v-for="room in rooms" :key="room.id" class="room-card" :class="{ unavailable: room.status !== 'open' }"><div class="room-card-top"><span class="region">{{ room.region }}</span><span :class="['room-state', room.status]">{{ room.status === 'open' ? '可进入' : '维护中' }}</span></div><h3>{{ room.name }}</h3><p>{{ room.subnet_cidr }}</p><div class="room-card-footer"><span><Users :size="16" /> {{ room.members }} / {{ room.capacity }}</span><button class="join-button" :disabled="loading || room.status !== 'open' || Boolean(activeLease) || (desktop() && !desktopStatus?.ready)" @click="joinRoom(room)">进入</button></div></article></div>
       </section>
 
-      <section class="game-settings"><div><p class="eyebrow">本机设置</p><h3>游戏程序</h3><p>选择 WE8 的主程序。Windows 客户端会在连接房间后从此路径启动游戏。</p></div><div class="path-field"><input v-model="gamePath" placeholder="例如 C:\\WE8\\we8.exe" /><button class="secondary-button" @click="chooseGame">选择</button><button class="primary-button launch" @click="launchGame"><Play :size="17" /> 启动游戏</button></div></section>
     </section>
   </main>
 </template>
