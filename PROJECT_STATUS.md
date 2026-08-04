@@ -40,7 +40,8 @@ Go 不保存用户密码，也不使用 Laravel JWT 访问平台接口。
 
 ### Windows 客户端
 
-- Vue 3 + TypeScript + Tauri 2
+- Vue 3 + TypeScript + Electron 22
+- Electron 22 是客户端主线，用于兼容 Windows 7
 - 登录、房间列表、进入和退出房间
 - 调用本机 SoftEther `vpncmd.exe`
 - 连接 VPN 后启动 WE8
@@ -106,7 +107,7 @@ Go 启动时自动执行幂等迁移 `20260803_soccer_identity`：
 
 - 配置并验证其余 Virtual Hub 的独立网段
 - 在两台 Windows 上验证完整的“登录 -> 进房 -> 自动 VPN -> WE8 对战 -> 退房”链路
-- 将 SoftEther VPN Client 和防火墙规则整合进 Windows 安装包
+- 在 Windows 7 与 Windows 10/11 验证 NSIS 安装器中的 SoftEther、虚拟网卡和防火墙规则
 
 SoftEther 管理端口 `5555` 只允许 Docker 内网或宿主机访问，不应向公网开放。
 
@@ -138,7 +139,7 @@ soccer-app         Laravel PHP-FPM
 soccer-nginx       Laravel API
 soccer-web         Soccer Vue 前端
 platform-api       Go API
-platform-web       Platform Vue/Tauri Web 前端
+platform-web       Platform Vue/Electron Web 前端
 ```
 
 本地端口：
@@ -175,6 +176,6 @@ SOFTETHER_ADMIN_PASSWORD=replace-with-server-admin-password
 ## 九、下一步
 
 1. 将本次 Laravel/Go 登录改造部署到测试服务器并验证真实 Soccer 账号。
-2. 在 Windows 重新构建 Tauri 客户端，API 地址指向测试域名。
+2. 在 Windows 重新构建 Electron 客户端，API 地址指向测试域名。
 3. 用两台 Windows 验证临时 SoftEther 账号、心跳续期和自动清理。
 4. 完成 Windows 安装器中的 SoftEther Client、虚拟网卡和防火墙规则整合。

@@ -31,7 +31,7 @@ API 容器需要挂载与 VPN Server 版本一致的 `vpncmd` Linux 可执行文
 
 ## Windows 客户端联调
 
-Tauri 客户端进入房间后会调用本机 SoftEther Client 的 `vpncmd.exe`：
+Electron 客户端进入房间后会调用本机 SoftEther Client 的 `vpncmd.exe`：
 
 1. 查找已有 SoftEther 虚拟网卡；没有时创建 `VPN`，如被占用则依次尝试 `VPN2` 到 `VPN127`。
 2. 创建名为 `WEL-<平台分配用户名>` 的 VPN Client 连接。
@@ -47,9 +47,8 @@ C:\Program Files (x86)\SoftEther VPN Client\vpncmd.exe
 
 Windows 联调前请确认：
 
-- SoftEther VPN Client 已安装并能手工连接一次；
-- 虚拟网卡驱动已经安装；
-- Tauri 客户端以管理员权限运行，以便创建虚拟网卡；
+- 使用完整 WEL 安装包安装，并同意管理员授权；
+- 安装阶段会安装 SoftEther VPN Client、创建 `VPN` 虚拟网卡并写入 Ping 防火墙规则；
 - API 的 `SOFTETHER_MODE` 已设为 `vpncmd`，不能继续使用 `mock`；
 - API 能访问 SoftEther Server 的管理端口，管理端口不要向全网开放。
 

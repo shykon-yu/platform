@@ -7,12 +7,20 @@ export type DesktopLease = {
   nicName?: string
 }
 
+export type DesktopStatus = {
+  admin: boolean
+  softetherInstalled: boolean
+  vpncmdPath: string | null
+  ready: boolean
+  message: string
+}
+
 declare global {
   interface Window {
     we8Desktop?: {
       connectVpn: (lease: DesktopLease) => Promise<void>
-      ensureSoftEther: () => Promise<boolean>
-      ensureFirewallRule: () => Promise<boolean>
+      desktopStatus: () => Promise<DesktopStatus>
+      prepareDesktop: () => Promise<DesktopStatus>
       disconnectVpn: (username: string) => Promise<void>
       chooseGame: () => Promise<string | null>
       launchGame: (gamePath: string) => Promise<void>

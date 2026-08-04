@@ -5,7 +5,7 @@ const https = require('node:https')
 const version = 'v4.42-9798-rtm-2023.06.30'
 const fileName = `softether-vpnclient-${version}-windows-x86_x64-intel.exe`
 const url = `https://www.softether-download.com/files/softether/${version}-tree/Windows/SoftEther_VPN_Client/${fileName}`
-const outputDir = path.join(__dirname, '..', 'resources', 'softether')
+const outputDir = path.join(__dirname, '..', 'build')
 const outputPath = path.join(outputDir, fileName)
 
 function download(target, redirects = 0) {

@@ -3,12 +3,21 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Gamepad2, LogOut, MonitorCog, Play, RefreshCw, Router, ShieldCheck, Users } from 'lucide-vue-next'
 import { ApiError, authApi, clearToken, roomApi, setToken, type Lease, type Room, type User } from './api'
 
+type DesktopStatus = {
+  admin: boolean
+  softetherInstalled: boolean
+  vpncmdPath: string | null
+  ready: boolean
+  message: string
+}
+
 const user = ref<User | null>(null)
 const rooms = ref<Room[]>([])
 const activeLease = ref<Lease | null>(null)
 const loading = ref(false)
 const errorMessage = ref('')
 const notice = ref('')
+const desktopStatus = ref<DesktopStatus | null>(null)
 const form = ref({ username: '', password: '' })
 const GAME_PATH_KEY = 'we8.game-path'
 const LEGACY_GAME_PATH_KEY = 'pes8.game-path'
@@ -28,6 +37,28 @@ function startLeaseHeartbeat() {
   if (!activeLease.value) return
   void renewLease()
   heartbeatTimer = window.setInterval(() => { void renewLease() }, heartbeatIntervalMs)
+}
+
+async function refreshDesktopStatus() {
+  if (!desktop()) return
+  try {
+    desktopStatus.value = await desktop()!.desktopStatus()
+  } catch (error) {
+    desktopStatus.value = null
+    errorMessage.value = messageOf(error)
+  }
+}
+
+async function ensureDesktopReady() {
+  if (!desktop()) return true
+  try {
+    desktopStatus.value = await desktop()!.prepareDesktop()
+    return true
+  } catch (error) {
+    desktopStatus.value = await desktop()!.desktopStatus().catch(() => null)
+    errorMessage.value = messageOf(error)
+    return false
+  }
 }
 
 async function renewLease() {
@@ -83,15 +114,17 @@ async function joinRoom(room: Room) {
   errorMessage.value = ''
   let lease: Lease | null = null
   try {
+    if (desktop() && !(await ensureDesktopReady())) return
     lease = (await roomApi.join(room.id)).lease
     activeLease.value = lease
     if (desktop()) {
-      await desktop()?.connectVpn({
+      await desktop()!.connectVpn({
         host: lease.server_host,
         port: lease.server_port,
         hub: lease.hub_name,
         username: lease.username,
         password: lease.password ?? '',
+        nicName: 'VPN',
       })
     }
     startLeaseHeartbeat()
@@ -141,11 +174,11 @@ function saveGamePath() {
 async function chooseGame() {
   errorMessage.value = ''
   if (!desktop()) {
-    notice.value = '浏览器预览不会弹出本机文件选择器，请在 Windows Electron 客户端测试'
+    notice.value = '浏览器预览不会弹出本机文件选择器，请在 Windows 客户端测试'
     return
   }
   try {
-    const selectedPath = await desktop()?.chooseGame()
+    const selectedPath = await desktop()!.chooseGame()
     if (!selectedPath) return
     gamePath.value = selectedPath
     saveGamePath()
@@ -157,8 +190,8 @@ async function launchGame() {
   errorMessage.value = ''
   if (!activeLease.value) { errorMessage.value = '请先进入一个房间并连接虚拟网络'; return }
   if (!gamePath.value.trim()) { errorMessage.value = '请先选择 WE8 游戏程序路径'; return }
-  if (!desktop()) { notice.value = '浏览器预览不会启动本机程序，请在 Windows Electron 客户端测试'; return }
-  try { await desktop()?.launchGame(gamePath.value); notice.value = '游戏已启动' } catch (error) { errorMessage.value = messageOf(error) }
+  if (!desktop()) { notice.value = '浏览器预览不会启动本机程序，请在 Windows 客户端测试'; return }
+  try { await desktop()!.launchGame(gamePath.value); notice.value = '游戏已启动' } catch (error) { errorMessage.value = messageOf(error) }
 }
 async function logout() {
   loading.value = true
@@ -182,6 +215,7 @@ function messageOf(error: unknown) {
 }
 
 onMounted(restoreSession)
+onMounted(refreshDesktopStatus)
 onBeforeUnmount(stopLeaseHeartbeat)
 </script>
 
@@ -209,6 +243,17 @@ onBeforeUnmount(stopLeaseHeartbeat)
     </aside>
 
     <section class="content">
+      <section v-if="desktop()" class="connection-strip">
+        <div>
+          <p class="eyebrow">联机准备</p>
+          <h3>{{ desktopStatus?.ready ? '安装包已准备完成' : '需要管理员授权' }}</h3>
+          <span>{{ desktopStatus?.message ?? '正在检测 SoftEther 与管理员权限' }}</span>
+        </div>
+        <div class="connection-actions">
+          <span class="secure"><ShieldCheck :size="17" /> {{ desktopStatus?.ready ? '可联机' : '不可联机' }}</span>
+          <button class="secondary-button" @click="refreshDesktopStatus" :disabled="loading">重新检测</button>
+        </div>
+      </section>
       <header class="topbar"><div><p class="eyebrow">游戏大厅</p><h2>选择一个对战房间</h2></div><div class="online"><span></span>{{ totalOnline }} 人在线</div></header>
       <p v-if="errorMessage" class="banner error">{{ errorMessage }}</p><p v-if="notice" class="banner notice">{{ notice }}</p>
 
@@ -218,7 +263,7 @@ onBeforeUnmount(stopLeaseHeartbeat)
       </section>
 
       <section class="room-section"><div class="section-heading"><h3>可用房间</h3><button class="icon-button" title="刷新房间" @click="loadRooms" :disabled="loading"><RefreshCw :size="18" :class="{ spinning: loading }" /></button></div>
-        <div class="room-grid"><article v-for="room in rooms" :key="room.id" class="room-card" :class="{ unavailable: room.status !== 'open' }"><div class="room-card-top"><span class="region">{{ room.region }}</span><span :class="['room-state', room.status]">{{ room.status === 'open' ? '可进入' : '维护中' }}</span></div><h3>{{ room.name }}</h3><p>{{ room.subnet_cidr }}</p><div class="room-card-footer"><span><Users :size="16" /> {{ room.members }} / {{ room.capacity }}</span><button class="join-button" :disabled="loading || room.status !== 'open' || Boolean(activeLease)" @click="joinRoom(room)">进入</button></div></article></div>
+        <div class="room-grid"><article v-for="room in rooms" :key="room.id" class="room-card" :class="{ unavailable: room.status !== 'open' }"><div class="room-card-top"><span class="region">{{ room.region }}</span><span :class="['room-state', room.status]">{{ room.status === 'open' ? '可进入' : '维护中' }}</span></div><h3>{{ room.name }}</h3><p>{{ room.subnet_cidr }}</p><div class="room-card-footer"><span><Users :size="16" /> {{ room.members }} / {{ room.capacity }}</span><button class="join-button" :disabled="loading || room.status !== 'open' || Boolean(activeLease) || (desktop() && !desktopStatus?.ready)" @click="joinRoom(room)">进入</button></div></article></div>
       </section>
 
       <section class="game-settings"><div><p class="eyebrow">本机设置</p><h3>游戏程序</h3><p>选择 WE8 的主程序。Windows 客户端会在连接房间后从此路径启动游戏。</p></div><div class="path-field"><input v-model="gamePath" placeholder="例如 C:\\WE8\\we8.exe" /><button class="secondary-button" @click="chooseGame">选择</button><button class="primary-button launch" @click="launchGame"><Play :size="17" /> 启动游戏</button></div></section>

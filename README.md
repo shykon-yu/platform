@@ -1,8 +1,10 @@
 # PES8 对战平台
 
-面向 Windows 的实况足球 8 虚拟局域网对战平台。当前仓库包含 Go API、MySQL/Redis 开发环境，以及 Vue 3 + Tauri 客户端骨架。
+面向 Windows 的实况足球 8 虚拟局域网对战平台。当前仓库包含 Go API、MySQL/Redis 开发环境，以及 Vue 3 + Electron 客户端骨架。Electron 22 作为 Windows 客户端主线，用于兼容 Windows 7。
 
 项目进度和后续计划见：[PROJECT_STATUS.md](./PROJECT_STATUS.md)
+
+Windows 安装器集成 SoftEther 的实现说明见：[docs/windows-installer.md](./docs/windows-installer.md)
 
 ## 当前阶段
 
@@ -15,7 +17,7 @@
 - SoftEther 连接凭据下发适配层
 - Windows 游戏路径选择和启动命令
 
-SoftEther `vpncmd` 模式已经可以真实下发临时账号；Windows Tauri 客户端会在进入房间后自动创建并连接 SoftEther Client 账号。单文件 Windows 安装器仍需在 Windows 机器上完成驱动、权限和杀毒软件联调。
+SoftEther `vpncmd` 模式已经可以真实下发临时账号；Windows Electron 客户端会在进入房间后创建并连接 SoftEther Client 账号。Windows NSIS 安装器会在安装阶段集成 SoftEther VPN Client、创建 `VPN` 虚拟网卡并写入虚拟局域网 Ping 防火墙规则。
 
 ## macOS 开发环境
 
@@ -50,7 +52,7 @@ VITE_WS_BASE_URL=ws://192.168.x.x:8080/api/v1
 
 macOS 防火墙需要允许端口 `8080`。真实 PES8 联机测试仍需连接阿里云 SoftEther Server，不能使用 macOS 浏览器预览代替。
 
-Windows Tauri 客户端在进入房间时会调用本机 `vpncmd.exe` 自动连接虚拟网络。浏览器预览只验证 API 和界面，不会连接 VPN 或启动本机游戏。
+Windows Electron 客户端在进入房间时会调用本机 `vpncmd.exe` 自动连接虚拟网络。浏览器预览只验证 API 和界面，不会连接 VPN 或启动本机游戏。
 
 ## 环境变量
 

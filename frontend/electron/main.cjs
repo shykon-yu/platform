@@ -5,8 +5,6 @@ const path = require('node:path')
 
 const DEFAULT_NIC = 'VPN'
 const API_URL = process.env.VITE_API_BASE_URL || 'http://www.jingzhu.top:8082/api/v1'
-const FIREWALL_RULE_NAME = 'WEL WE8 Virtual LAN ICMPv4'
-const VIRTUAL_NETWORK = '10.80.0.0/16'
 
 function createWindow() {
   const window = new BrowserWindow({
@@ -40,90 +38,32 @@ function locateInstalledVpncmd() {
   return vpncmd === 'vpncmd.exe' ? null : vpncmd
 }
 
-function locateSoftEtherInstaller() {
-  const fileName = 'softether-vpnclient-v4.42-9798-rtm-2023.06.30-windows-x86_x64-intel.exe'
-  const candidates = [
-    path.join(process.resourcesPath, 'softether', fileName),
-    path.join(__dirname, '..', 'resources', 'softether', fileName),
-  ]
-  return candidates.find((candidate) => fs.existsSync(candidate)) || null
-}
-
-function runElevatedInstaller(installer) {
-  return new Promise((resolve, reject) => {
-    const child = spawn('powershell.exe', [
-      '-NoProfile',
-      '-ExecutionPolicy', 'Bypass',
-      '-Command',
-      `Start-Process -FilePath '${installer.replaceAll("'", "''")}' -Verb RunAs -Wait`,
-    ], { windowsHide: true, windowsVerbatimArguments: false })
-    let stderr = ''
-    child.stderr.on('data', (chunk) => { stderr += chunk.toString() })
-    child.on('error', (error) => reject(`无法启动 SoftEther 安装程序：${error.message}`))
-    child.on('close', (code) => {
-      if (code === 0) return resolve()
-      reject(stderr.trim() || 'SoftEther 安装未完成')
-    })
-  })
-}
-
-function runElevatedProcess(file, args) {
-  return new Promise((resolve, reject) => {
-    const encodedArgs = args.map((value) => `'${String(value).replaceAll("'", "''")}'`).join(',')
-    const command = `Start-Process -FilePath '${file.replaceAll("'", "''")}' -ArgumentList @(${encodedArgs}) -Verb RunAs -Wait`
-    const child = spawn('powershell.exe', [
-      '-NoProfile',
-      '-ExecutionPolicy', 'Bypass',
-      '-Command',
-      command,
-    ], { windowsHide: true, windowsVerbatimArguments: false })
-    let stderr = ''
-    child.stderr.on('data', (chunk) => { stderr += chunk.toString() })
-    child.on('error', (error) => reject(error))
-    child.on('close', (code) => {
-      if (code === 0) return resolve()
-      reject(new Error(stderr.trim() || `${file} 执行失败`))
-    })
-  })
-}
-
-function firewallRuleExists() {
+function isRunningAsAdmin() {
   return new Promise((resolve) => {
-    const child = spawn('netsh.exe', [
-      'advfirewall', 'firewall', 'show', 'rule', `name=${FIREWALL_RULE_NAME}`,
-    ], { windowsHide: true })
-    let output = ''
-    child.stdout.on('data', (chunk) => { output += chunk.toString() })
-    child.stderr.on('data', (chunk) => { output += chunk.toString() })
-    child.on('close', () => resolve(output.includes(FIREWALL_RULE_NAME)))
+    if (process.platform !== 'win32') return resolve(false)
+    const child = spawn('cmd.exe', ['/C', 'net', 'session'], { windowsHide: true })
+    child.on('close', (code) => resolve(code === 0))
     child.on('error', () => resolve(false))
   })
 }
 
-async function ensureFirewallRule() {
-  if (process.platform !== 'win32' || await firewallRuleExists()) return
-  await runElevatedProcess('netsh.exe', [
-    'advfirewall', 'firewall', 'add', 'rule',
-    `name=${FIREWALL_RULE_NAME}`,
-    'dir=in',
-    'action=allow',
-    'protocol=icmpv4:8,any',
-    `remoteip=${VIRTUAL_NETWORK}`,
-    'profile=any',
-    'enable=yes',
-  ])
+async function desktopStatus() {
+  const vpncmdPath = locateInstalledVpncmd()
+  const softetherInstalled = Boolean(vpncmdPath)
+  const admin = await isRunningAsAdmin()
+  const ready = softetherInstalled
+  const message = ready
+    ? '联机环境已准备好'
+    : '未检测到 SoftEther VPN Client。请使用完整安装包安装，拒绝管理员授权将无法联机。'
+  return { admin, softetherInstalled, vpncmdPath, ready, message }
 }
 
-async function ensureSoftEther() {
-  if (process.platform !== 'win32') throw new Error('SoftEther 自动安装仅支持 Windows 客户端')
-  const installed = locateInstalledVpncmd()
-  if (installed) return installed
-  const installer = locateSoftEtherInstaller()
-  if (!installer) throw new Error('客户端未找到 SoftEther 安装包，请重新下载完整安装包')
-  await runElevatedInstaller(installer)
-  const afterInstall = locateInstalledVpncmd()
-  if (!afterInstall) throw new Error('SoftEther 安装完成，但未找到 VPN Client，请重启客户端后重试')
-  return afterInstall
+async function prepareDesktop() {
+  const status = await desktopStatus()
+  if (!status.softetherInstalled) {
+    throw new Error('未检测到 SoftEther VPN Client。请重新运行完整安装包并同意管理员授权，否则无法联机。')
+  }
+  return status
 }
 
 function runVpncmd(args) {
@@ -183,8 +123,7 @@ ipcMain.handle('connect-vpn', async (_event, lease) => {
   validateIdentifier(lease.hub, '虚拟 HUB')
   validateIdentifier(lease.username, 'VPN 用户名')
   if (!lease.host || !lease.password || !lease.port) throw new Error('VPN 连接参数不完整')
-  await ensureSoftEther()
-  await ensureFirewallRule()
+  await prepareDesktop()
   const nic = await resolveNic(lease.nicName)
   const account = `WEL-${lease.username}`
   const server = `${lease.host}:${lease.port}`
@@ -194,15 +133,9 @@ ipcMain.handle('connect-vpn', async (_event, lease) => {
   await runVpncmd(['localhost', '/CLIENT', '/CMD', 'AccountConnect', account])
 })
 
-ipcMain.handle('ensure-softether', async () => {
-  await ensureSoftEther()
-  return true
-})
+ipcMain.handle('desktop-status', () => desktopStatus())
 
-ipcMain.handle('ensure-firewall-rule', async () => {
-  await ensureFirewallRule()
-  return true
-})
+ipcMain.handle('prepare-desktop', () => prepareDesktop())
 
 ipcMain.handle('disconnect-vpn', async (_event, username) => {
   validateIdentifier(username, 'VPN 用户名')

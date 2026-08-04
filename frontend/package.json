@@ -22,20 +22,15 @@
     "productName": "WEL职业联盟对战平台",
     "directories": { "output": "release" },
     "files": ["dist/**/*", "electron/**/*"],
-    "extraResources": [
-      {
-        "from": "resources/softether",
-        "to": "softether",
-        "filter": ["softether-vpnclient*.exe"]
-      }
-    ],
     "win": {
       "target": [{ "target": "nsis", "arch": ["x64"] }],
       "icon": "src-tauri/icons/icon.ico"
     },
     "nsis": {
+      "include": "build/installer.nsh",
       "oneClick": false,
       "perMachine": true,
+      "allowElevation": true,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
