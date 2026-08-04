@@ -1,21 +1,4 @@
-!macro customWelcomePage
-  !define MUI_WELCOMEPAGE_TITLE "安装 WEL 职业联盟对战平台"
-  !define MUI_WELCOMEPAGE_TEXT "本安装包将安装平台主程序、SoftEther VPN Client、虚拟网卡和必要防火墙规则。$\r$\n$\r$\n这些组件用于 WE8 虚拟局域网联机。如果你拒绝管理员授权，平台将无法进行联机。"
-  !insertMacro MUI_PAGE_WELCOME
-!macroend
-
 !macro customInstall
-  ${ifNot} ${isUpdated}
-    MessageBox MB_ICONINFORMATION|MB_OKCANCEL \
-      "接下来会安装虚拟局域网组件并写入联机所需规则。$\r$\n$\r$\n如果你取消或拒绝管理员授权，平台可以打开，但不能进入房间联机。" \
-      IDOK wel_continue IDCANCEL wel_cancel
-
-    wel_cancel:
-      Abort "你已取消联机组件安装。未完成管理员授权时无法联机。"
-
-    wel_continue:
-  ${endIf}
-
   ClearErrors
   IfFileExists "$PROGRAMFILES64\SoftEther VPN Client\vpncmd.exe" softether_ready
   IfFileExists "$PROGRAMFILES32\SoftEther VPN Client\vpncmd.exe" softether_ready
@@ -23,10 +6,12 @@
   File /oname=$PLUGINSDIR\softether-vpnclient.exe "${BUILD_RESOURCES_DIR}\softether-vpnclient-v4.42-9798-rtm-2023.06.30-windows-x86_x64-intel.exe"
   IfErrors softether_missing 0
 
-  DetailPrint "正在安装 SoftEther VPN Client..."
-  ExecWait '"$PLUGINSDIR\softether-vpnclient.exe"' $0
+  DetailPrint "正在安装联机组件..."
+  ; SoftEther's bootstrapper has no generic /S switch. Start it hidden so
+  ; the WEL installer remains the only visible installer window.
+  ExecShellWait "open" '"$PLUGINSDIR\softether-vpnclient.exe" /UAC:yes /HIDESTARTCOMMAND:yes' SW_HIDE $0
   ${If} $0 != 0
-    MessageBox MB_ICONEXCLAMATION|MB_OK "SoftEther VPN Client 安装返回代码 $0。平台可以打开，但在联机组件安装完成前无法进入房间。"
+    Abort "联机组件安装失败（SoftEther 返回代码 $0）。请以管理员身份重新运行 WEL 安装包。"
   ${EndIf}
 
 softether_ready:
@@ -49,7 +34,7 @@ softether_config_done:
   Goto installer_done
 
 softether_missing:
-  MessageBox MB_ICONEXCLAMATION|MB_OK "安装包内未找到 SoftEther VPN Client。请重新下载完整安装包，否则无法联机。"
+  Abort "安装包缺少联机组件。请重新下载完整 WEL 安装包。"
 
 installer_done:
 !macroend
