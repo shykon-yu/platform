@@ -1,9 +1,8 @@
 const fs = require('node:fs')
 const path = require('node:path')
 const zlib = require('node:zlib')
+const { fileName } = require('./softether-version.cjs')
 
-const version = 'v4.42-9798-rtm-2023.06.30'
-const fileName = `softether-vpnclient-${version}-windows-x86_x64-intel.exe`
 const sourcePath = path.join(__dirname, '..', 'build', fileName)
 const outputDir = path.join(__dirname, '..', 'build', 'softether-runtime')
 

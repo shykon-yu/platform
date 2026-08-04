@@ -1,8 +1,10 @@
 !macro customInstall
   ClearErrors
-  IfFileExists "$PROGRAMFILES64\WEL\SoftEther\vpncmd_x64.exe" custom_service
   IfFileExists "$PROGRAMFILES64\SoftEther VPN Client\vpncmd.exe" official_ready
 
+  DetailPrint "正在更新 WEL 联机组件..."
+  ExecWait '"$SYSDIR\sc.exe" stop SEVPNCLIENT' $0
+  ExecWait '"$SYSDIR\sc.exe" delete SEVPNCLIENT' $1
   SetOutPath "$PROGRAMFILES64\WEL\SoftEther"
   File /r "${BUILD_RESOURCES_DIR}\softether-runtime\*.*"
 
@@ -36,6 +38,8 @@ installer_done:
     ExecWait '"$SYSDIR\sc.exe" stop SEVPNCLIENT' $1
     ExecWait '"$SYSDIR\sc.exe" delete SEVPNCLIENT' $2
     DeleteRegKey HKLM "Software\WEL\SoftEther"
+    RMDir /r "$PROGRAMFILES64\WEL\SoftEther"
+    RMDir "$PROGRAMFILES64\WEL"
   ${EndIf}
   ExecWait 'netsh advfirewall firewall delete rule name="WEL WE8 Virtual LAN ICMPv4"' $3
 !macroend
