@@ -11,6 +11,10 @@ custom_service:
   ExecWait '"$SYSDIR\sc.exe" create SEVPNCLIENT binPath= "\"$PROGRAMFILES64\WEL\SoftEther\vpnclient_x64.exe\" /service" start= auto DisplayName= "WEL Virtual LAN Service"' $0
   ExecWait '"$SYSDIR\sc.exe" start SEVPNCLIENT' $1
   Sleep 5000
+  DetailPrint "正在安装 WEL 虚拟网卡..."
+  SetOutPath "$PROGRAMFILES64\WEL\SoftEther"
+  ExecWait '"$PROGRAMFILES64\WEL\SoftEther\driver_installer_x64.exe" instvlan VPN' $2
+  Sleep 3000
   WriteRegDWORD HKLM "Software\WEL\SoftEther" "ManagedByWel" 1
   Goto firewall_rules
 
