@@ -8,8 +8,8 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vue-tsc --noEmit && vite build",
-    "electron:dev": "pnpm build && electron electron/main.cjs",
-    "electron:build": "pnpm build && electron-builder --win nsis",
+    "electron:dev": "npm run build && electron electron/main.cjs",
+    "electron:build": "npm run build && electron-builder --win nsis",
     "electron": "electron"
   },
   "dependencies": {
