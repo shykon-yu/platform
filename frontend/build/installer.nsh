@@ -14,37 +14,15 @@
   nsExec::ExecToLog '"$SYSDIR\sc.exe" start SEVPNCLIENT'
   Pop $1
   WriteRegDWORD HKLM "Software\WEL\SoftEther" "ManagedByWel" 1
-  StrCpy $2 "$PROGRAMFILES64\WEL\SoftEther\vpncmd_x64.exe"
-  Goto vpncmd_found
+  Goto firewall_rules
 
 custom_ready:
-  StrCpy $2 "$PROGRAMFILES64\WEL\SoftEther\vpncmd_x64.exe"
-  Goto vpncmd_found
+  Goto firewall_rules
 
 official_ready:
-  StrCpy $2 "$PROGRAMFILES64\SoftEther VPN Client\vpncmd.exe"
+  Goto firewall_rules
 
-vpncmd_found:
-  StrCpy $6 0
-wait_softether:
-  nsExec::ExecToStack '"$2" localhost /CLIENT /CMD NicList'
-  Pop $3
-  Pop $4
-  ${If} $3 == 0
-    Goto softether_ready
-  ${EndIf}
-  IntOp $6 $6 + 1
-  ${If} $6 < 30
-    Sleep 1000
-    Goto wait_softether
-  ${EndIf}
-  Abort "联机组件尚未准备完成。请重新运行安装包。"
-
-softether_ready:
-  DetailPrint "正在创建 SoftEther 虚拟网卡..."
-  nsExec::ExecToLog '"$2" localhost /CLIENT /CMD NicCreate VPN'
-  Pop $3
-
+firewall_rules:
   DetailPrint "正在写入防火墙规则..."
   nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="WEL WE8 Virtual LAN ICMPv4"'
   Pop $4
