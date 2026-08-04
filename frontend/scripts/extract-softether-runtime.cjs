@@ -125,6 +125,58 @@ function readPeResources(buffer) {
   }
 }
 
+function readHamcoreFiles(buffer) {
+  const magic = buffer.subarray(0, 7).toString('ascii')
+  if (magic !== 'HamCore') {
+    throw new Error('SoftEther hamcore.se2 格式不正确')
+  }
+
+  let offset = 7
+  const read32 = () => {
+    const value = buffer.readUInt32BE(offset)
+    offset += 4
+    return value
+  }
+  const count = read32()
+  const files = []
+
+  for (let index = 0; index < count; index += 1) {
+    const nameSize = read32()
+    const name = buffer.subarray(offset, offset + nameSize - 1).toString('utf8')
+    offset += nameSize - 1
+    files.push({
+      name,
+      size: read32(),
+      compressedSize: read32(),
+      fileOffset: read32(),
+    })
+  }
+
+  return files.map((file) => {
+    const compressed = buffer.subarray(file.fileOffset, file.fileOffset + file.compressedSize)
+    const data = zlib.inflateSync(compressed)
+    if (data.length !== file.size) {
+      throw new Error(`HamCore 文件 ${file.name} 解压后的长度不正确`)
+    }
+    return { name: file.name, data }
+  })
+}
+
+function shouldExtractRuntimeFile(name) {
+  return name === 'driver_installer.exe'
+    || name === 'driver_installer_x64.exe'
+    || name === 'empty_sevpnclient.config'
+    || name === 'install_src.dat'
+    || /^vpninstall_(cn|en|ja)\.inf$/i.test(name)
+    || name.startsWith('DriverPackages\\')
+}
+
+function writeRuntimeFile(name, data) {
+  const outputPath = path.join(outputDir, ...name.split('\\'))
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true })
+  fs.writeFileSync(outputPath, data)
+}
+
 if (!fs.existsSync(sourcePath)) {
   throw new Error(`找不到 SoftEther 安装包：${sourcePath}`)
 }
@@ -135,4 +187,10 @@ fs.mkdirSync(outputDir, { recursive: true })
 fs.writeFileSync(path.join(outputDir, 'vpnclient_x64.exe'), resources.vpnclient)
 fs.writeFileSync(path.join(outputDir, 'vpncmd_x64.exe'), resources.vpncmd)
 fs.writeFileSync(path.join(outputDir, 'hamcore.se2'), resources.hamcore)
-console.log(`Prepared SoftEther runtime files in ${outputDir}`)
+let extractedCount = 0
+for (const file of readHamcoreFiles(resources.hamcore)) {
+  if (!shouldExtractRuntimeFile(file.name)) continue
+  writeRuntimeFile(file.name, file.data)
+  extractedCount += 1
+}
+console.log(`Prepared SoftEther runtime files in ${outputDir} (${extractedCount} driver/support files)`)

@@ -86,9 +86,9 @@ function createChineseMenu() {
 
 function locateVpncmd() {
   const candidates = [
+    'C:\\Program Files\\WEL\\SoftEther\\vpncmd_x64.exe',
     'C:\\Program Files\\SoftEther VPN Client\\vpncmd.exe',
     'C:\\Program Files (x86)\\SoftEther VPN Client\\vpncmd.exe',
-    'C:\\Program Files\\WEL\\SoftEther\\vpncmd_x64.exe',
   ]
   const existing = candidates.find((candidate) => fs.existsSync(candidate))
   return existing || 'vpncmd.exe'
