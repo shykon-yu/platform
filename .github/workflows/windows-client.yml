@@ -53,10 +53,13 @@ jobs:
           if ($lockVersion.Line -ne 'version = 3') {
             throw 'Cargo.lock must stay at version 3 for Rust 1.77.2'
           }
+          if (Select-String -Path src-tauri/Cargo.lock -Pattern '^name = "(zeroize|wasip2|wit-bindgen)"') {
+            throw 'Cargo.lock contains a Rust 1.85+ dependency'
+          }
           cargo fetch --locked --manifest-path src-tauri/Cargo.toml --target $env:RUST_TARGET
 
       - name: Build Windows installer
-        run: pnpm tauri build --bundles nsis --target $env:RUST_TARGET --ci -- --ignore-rust-version
+        run: pnpm tauri build --bundles nsis --target $env:RUST_TARGET --ci -- --locked --ignore-rust-version
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
