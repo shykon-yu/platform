@@ -251,7 +251,6 @@ fn spawn_command(command: &mut Command) -> std::io::Result<std::process::Child> 
 
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_title("WEL职业联盟对战平台");

@@ -14,9 +14,6 @@ importers:
       '@tauri-apps/api':
         specifier: 2.0.0
         version: 2.0.0
-      '@tauri-apps/plugin-opener':
-        specifier: 2.0.0
-        version: 2.0.0
       lucide-vue-next:
         specifier: ^0.468.0
         version: 0.468.0(vue@3.5.40(typescript@5.6.3))
@@ -440,9 +437,6 @@ packages:
     resolution: {integrity: sha512-xxmPllRa6w/LRRcPczST3yHrYoi8l6ZZmzwabEmM0cgDdhVDmX+Y4oDJkiKD+8cVdxwwEzIuIKuaCwsX8iNsgA==}
     engines: {node: '>= 10'}
     hasBin: true
-
-  '@tauri-apps/plugin-opener@2.0.0':
-    resolution: {integrity: sha512-J7xGF34HCI/ZdAh2hH72mYg5otwxWYY/5KJ+c2wE+Dr8qzCGF+PhdttNVam94RFTs5mwJ393t/mo8OSolFyWtw==}
 
   '@types/estree@1.0.9':
     resolution: {integrity: sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg==}
@@ -901,10 +895,6 @@ snapshots:
       '@tauri-apps/cli-win32-arm64-msvc': 2.0.0
       '@tauri-apps/cli-win32-ia32-msvc': 2.0.0
       '@tauri-apps/cli-win32-x64-msvc': 2.0.0
-
-  '@tauri-apps/plugin-opener@2.0.0':
-    dependencies:
-      '@tauri-apps/api': 2.0.0
 
   '@types/estree@1.0.9': {}
 

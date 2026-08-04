@@ -6,5 +6,6 @@
 **/dist/
 **/target/
 **/Cargo.lock
+!frontend/src-tauri/Cargo.lock
 backend/tmp/
 data/

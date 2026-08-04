@@ -11,9 +11,8 @@ jobs:
     runs-on: windows-latest
 
     env:
-      RUST_LOCK_TOOLCHAIN: 1.84.1
-      RUST_BUILD_TOOLCHAIN: 1.77.2
-      RUST_TARGET: x86_64-pc-windows-msvc
+      RUST_TOOLCHAIN: 1.77.2
+      RUST_TARGET: x86_64-win7-windows-msvc
 
     defaults:
       run:
@@ -35,10 +34,10 @@ jobs:
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
 
-      - name: Setup Rust for dependency resolution
+      - name: Setup Rust for Win7 build
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ env.RUST_LOCK_TOOLCHAIN }}
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ env.RUST_TARGET }}
 
       - name: Install NSIS
@@ -47,26 +46,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Generate Cargo.lock
+      - name: Verify locked Rust dependencies
         run: |
-          cargo generate-lockfile --manifest-path src-tauri/Cargo.toml
-          cargo update --manifest-path src-tauri/Cargo.toml -p 'plist@1.10.0' --precise 1.7.0
-          cargo update --manifest-path src-tauri/Cargo.toml -p 'serde_with@3.21.0' --precise 3.12.0
-          cargo update --manifest-path src-tauri/Cargo.toml -p 'time@0.3.55' --precise 0.3.36
           $lockVersion = Select-String -Path src-tauri/Cargo.lock -Pattern '^version = ' | Select-Object -First 1
           Write-Host $lockVersion.Line
           if ($lockVersion.Line -ne 'version = 3') {
             throw 'Cargo.lock must stay at version 3 for Rust 1.77.2'
           }
-
-      - name: Setup Rust for Win7 build
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_BUILD_TOOLCHAIN }}
-          targets: ${{ env.RUST_TARGET }}
+          cargo fetch --locked --manifest-path src-tauri/Cargo.toml --target $env:RUST_TARGET
 
       - name: Build Windows installer
-        run: pnpm tauri build --bundles nsis --target $env:RUST_TARGET --ci
+        run: pnpm tauri build --bundles nsis --target $env:RUST_TARGET --ci -- --ignore-rust-version
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
