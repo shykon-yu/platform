@@ -7,14 +7,8 @@ on:
 
 jobs:
   build:
-    name: Build Win7-compatible NSIS installer
+    name: Build Electron Win7 NSIS installer
     runs-on: windows-latest
-
-    env:
-      RUST_TOOLCHAIN: 1.77.2
-      RUST_TARGET: x86_64-pc-windows-msvc
-      CARGO_HOME: ${{ github.workspace }}\.cargo-ci
-      CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
 
     defaults:
       run:
@@ -24,59 +18,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 11.11.0
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
-
-      - name: Setup Rust for Win7 build
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          targets: ${{ env.RUST_TARGET }}
-
-      - name: Isolate Cargo registry
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path $env:CARGO_HOME | Out-Null
-          @"
-          [registries.crates-io]
-          protocol = "sparse"
-          "@ | Set-Content -Path (Join-Path $env:CARGO_HOME 'config.toml')
-          Write-Host "CARGO_HOME=$env:CARGO_HOME"
-          cargo --version
-
-      - name: Install NSIS
-        run: choco install nsis -y --no-progress
+          node-version: 18
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Verify locked Rust dependencies
-        run: |
-          $lockVersion = Select-String -Path src-tauri/Cargo.lock -Pattern '^version = ' | Select-Object -First 1
-          Write-Host $lockVersion.Line
-          if ($lockVersion.Line -ne 'version = 3') {
-            throw 'Cargo.lock must stay at version 3 for Rust 1.77.2'
-          }
-          if (Select-String -Path src-tauri/Cargo.lock -Pattern '^name = "(zeroize|wasip2|wit-bindgen)"') {
-            throw 'Cargo.lock contains a Rust 1.85+ dependency'
-          }
-          cargo fetch --locked --manifest-path src-tauri/Cargo.toml --target $env:RUST_TARGET
+        run: npm install --legacy-peer-deps --ignore-scripts
 
       - name: Build Windows installer
-        run: pnpm tauri build --bundles nsis --target $env:RUST_TARGET --ci -- --locked --ignore-rust-version
+        run: npm run electron:build
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
           name: wel-platform-windows-win7-nsis
-          path: frontend/src-tauri/target/${{ env.RUST_TARGET }}/release/bundle/nsis/*.exe
+          path: frontend/release/*Setup*.exe
           if-no-files-found: error

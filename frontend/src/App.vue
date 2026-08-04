@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
 import { Gamepad2, LogOut, MonitorCog, Play, RefreshCw, Router, ShieldCheck, Users } from 'lucide-vue-next'
 import { ApiError, authApi, clearToken, roomApi, setToken, type Lease, type Room, type User } from './api'
 
@@ -15,7 +14,7 @@ const GAME_PATH_KEY = 'we8.game-path'
 const LEGACY_GAME_PATH_KEY = 'pes8.game-path'
 const gamePath = ref(localStorage.getItem(GAME_PATH_KEY) ?? localStorage.getItem(LEGACY_GAME_PATH_KEY) ?? '')
 const totalOnline = computed(() => rooms.value.reduce((total, room) => total + room.members, 0))
-const isTauri = () => Boolean((window as unknown as Record<string, unknown>).__TAURI_INTERNALS__)
+const desktop = () => window.we8Desktop
 const heartbeatIntervalMs = 5 * 60 * 1000
 let heartbeatTimer: number | undefined
 
@@ -40,9 +39,7 @@ async function renewLease() {
   } catch (error) {
     if (error instanceof ApiError && (error.status === 404 || error.status === 409)) {
       stopLeaseHeartbeat()
-      if (isTauri()) {
-        try { await invoke('disconnect_vpn', { username: lease.username }) } catch { /* local connection may already be gone */ }
-      }
+      try { await desktop()?.disconnectVpn(lease.username) } catch { /* local connection may already be gone */ }
       activeLease.value = null
       await loadRooms()
       errorMessage.value = error.message
@@ -88,13 +85,13 @@ async function joinRoom(room: Room) {
   try {
     lease = (await roomApi.join(room.id)).lease
     activeLease.value = lease
-    if (isTauri()) {
-      await invoke('connect_vpn', {
+    if (desktop()) {
+      await desktop()?.connectVpn({
         host: lease.server_host,
         port: lease.server_port,
         hub: lease.hub_name,
         username: lease.username,
-        password: lease.password,
+        password: lease.password ?? '',
       })
     }
     startLeaseHeartbeat()
@@ -102,8 +99,8 @@ async function joinRoom(room: Room) {
     await loadRooms()
   } catch (error) {
     stopLeaseHeartbeat()
-    if (lease && isTauri()) {
-      try { await invoke('disconnect_vpn', { username: lease.username }) } catch { /* connection setup may be incomplete */ }
+    if (lease) {
+      try { await desktop()?.disconnectVpn(lease.username) } catch { /* connection setup may be incomplete */ }
     }
     if (lease) try { await roomApi.leave(room.id) } catch { /* the lease reaper will clean it up */ }
     activeLease.value = null
@@ -116,9 +113,7 @@ async function releaseActiveLease() {
   if (!lease) return
   stopLeaseHeartbeat()
   let cleanupError: unknown
-  if (isTauri()) {
-    try { await invoke('disconnect_vpn', { username: lease.username }) } catch (error) { cleanupError = error }
-  }
+  try { await desktop()?.disconnectVpn(lease.username) } catch (error) { cleanupError = error }
   try {
     await roomApi.leave(lease.room_id)
   } catch (error) {
@@ -150,8 +145,8 @@ async function launchGame() {
   errorMessage.value = ''
   if (!activeLease.value) { errorMessage.value = '请先进入一个房间并连接虚拟网络'; return }
   if (!gamePath.value.trim()) { errorMessage.value = '请先选择 WE8 游戏程序路径'; return }
-  if (!(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__) { notice.value = '浏览器预览不会启动本机程序，请在 Windows Tauri 客户端测试'; return }
-  try { await invoke('launch_game', { path: gamePath.value }); notice.value = '游戏已启动' } catch (error) { errorMessage.value = messageOf(error) }
+  if (!desktop()) { notice.value = '浏览器预览不会启动本机程序，请在 Windows Electron 客户端测试'; return }
+  try { await desktop()?.launchGame(gamePath.value); notice.value = '游戏已启动' } catch (error) { errorMessage.value = messageOf(error) }
 }
 async function logout() {
   loading.value = true

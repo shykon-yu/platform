@@ -1,9 +1,6 @@
 packages:
   - .
 
-overrides:
-  '@tauri-apps/api': 2.0.0
-
 allowBuilds:
   esbuild: true
   vue-demi: true
