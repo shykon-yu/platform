@@ -108,15 +108,34 @@ function isRunningAsAdmin() {
   })
 }
 
+function querySoftEtherService() {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') return resolve({ installed: false, running: false })
+    const child = spawn('cmd.exe', ['/C', 'sc', 'query', 'SEVPNCLIENT'], { windowsHide: true })
+    let output = ''
+    child.stdout.on('data', (chunk) => { output += chunk.toString() })
+    child.stderr.on('data', (chunk) => { output += chunk.toString() })
+    child.on('error', () => resolve({ installed: false, running: false }))
+    child.on('close', (code) => {
+      const installed = code === 0
+      const running = installed && /RUNNING/i.test(output)
+      resolve({ installed, running })
+    })
+  })
+}
+
 async function desktopStatus() {
   const vpncmdPath = locateInstalledVpncmd()
   const softetherInstalled = Boolean(vpncmdPath)
+  const service = await querySoftEtherService()
   const admin = await isRunningAsAdmin()
-  const ready = softetherInstalled
+  const ready = softetherInstalled && service.running
   const message = ready
     ? '联机环境已准备好'
-    : '未检测到 SoftEther VPN Client。请使用完整安装包安装，拒绝管理员授权将无法联机。'
-  return { admin, softetherInstalled, vpncmdPath, ready, message }
+    : softetherInstalled
+      ? 'SoftEther 文件已安装，但后台服务未运行。请重新运行完整安装包并同意管理员授权。'
+      : '未检测到 SoftEther VPN Client。请使用完整安装包安装，拒绝管理员授权将无法联机。'
+  return { admin, softetherInstalled, vpncmdPath, serviceInstalled: service.installed, serviceRunning: service.running, ready, message }
 }
 
 async function prepareDesktop() {
