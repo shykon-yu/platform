@@ -13,6 +13,10 @@ export type DesktopStatus = {
   vpncmdPath: string | null
   ready: boolean
   message: string
+  serviceInstalled?: boolean
+  serviceRunning?: boolean
+  systemVersion?: string
+  isWindows7?: boolean
 }
 
 declare global {

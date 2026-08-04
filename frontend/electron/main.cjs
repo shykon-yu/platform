@@ -129,19 +129,23 @@ async function desktopStatus() {
   const softetherInstalled = Boolean(vpncmdPath)
   const service = await querySoftEtherService()
   const admin = await isRunningAsAdmin()
+  const systemVersion = process.platform === 'win32' ? process.getSystemVersion() : ''
+  const isWindows7 = process.platform === 'win32' && systemVersion.startsWith('6.1')
   const ready = softetherInstalled && service.running
   const message = ready
     ? '联机环境已准备好'
-    : softetherInstalled
-      ? 'SoftEther 文件已安装，但后台服务未运行。请重新运行完整安装包并同意管理员授权。'
-      : '未检测到 SoftEther VPN Client。请使用完整安装包安装，拒绝管理员授权将无法联机。'
-  return { admin, softetherInstalled, vpncmdPath, serviceInstalled: service.installed, serviceRunning: service.running, ready, message }
+    : isWindows7
+      ? '检测到 Win7，必须先安装 SoftEther VPN Client 虚拟网卡组件，安装完成后重新打开平台。'
+      : softetherInstalled
+        ? 'SoftEther 文件已安装，但后台服务未运行。请重新运行完整安装包并同意管理员授权。'
+        : '未检测到 SoftEther VPN Client。请使用完整安装包安装，拒绝管理员授权将无法联机。'
+  return { admin, softetherInstalled, vpncmdPath, serviceInstalled: service.installed, serviceRunning: service.running, systemVersion, isWindows7, ready, message }
 }
 
 async function prepareDesktop() {
   const status = await desktopStatus()
-  if (!status.softetherInstalled) {
-    throw new Error('未检测到 SoftEther VPN Client。请重新运行完整安装包并同意管理员授权，否则无法联机。')
+  if (!status.ready) {
+    throw new Error(status.message || '联机环境未准备好，请重新运行完整安装包并同意管理员授权。')
   }
   return status
 }
