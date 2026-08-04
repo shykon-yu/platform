@@ -1,4 +1,4 @@
-const apiBase = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080/api/v1'
+const apiBase = import.meta.env.VITE_API_BASE_URL ?? 'http://www.jingzhu.top:8082/api/v1'
 const ACCESS_TOKEN_KEY = 'we8.access-token'
 const LEGACY_ACCESS_TOKEN_KEY = 'pes8.access-token'
 

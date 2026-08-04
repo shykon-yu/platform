@@ -5,6 +5,8 @@ const path = require('node:path')
 const { version: appVersion } = require('../package.json')
 
 const DEFAULT_NIC = 'VPN'
+const DEFAULT_VPN_HOST = 'www.jingzhu.top'
+const DEFAULT_VPN_PORT = 992
 const API_URL = process.env.VITE_API_BASE_URL || 'http://www.jingzhu.top:8082/api/v1'
 
 function createWindow() {
@@ -155,6 +157,34 @@ function nicExists(output, nic) {
   return output.split(/\r?\n/).some((line) => line.split('|').some((part) => part.trim().toLowerCase() === nic.toLowerCase()))
 }
 
+function apiHostname() {
+  try {
+    const hostname = new URL(API_URL).hostname
+    return isLocalOrPlaceholderHost(hostname) ? DEFAULT_VPN_HOST : hostname
+  } catch {
+    return DEFAULT_VPN_HOST
+  }
+}
+
+function isLocalOrPlaceholderHost(host) {
+  const normalized = String(host || '').trim().toLowerCase()
+  return !normalized
+    || normalized === 'localhost'
+    || normalized === '127.0.0.1'
+    || normalized === '0.0.0.0'
+    || normalized === '::1'
+    || normalized === 'pending-softether-host'
+}
+
+function resolveVpnServer(lease) {
+  const host = isLocalOrPlaceholderHost(lease.host) ? apiHostname() : String(lease.host).trim()
+  const rawPort = Number(lease.port)
+  const port = Number.isInteger(rawPort) && rawPort > 0 && rawPort < 65536 && rawPort !== 443
+    ? rawPort
+    : DEFAULT_VPN_PORT
+  return `${host}:${port}`
+}
+
 async function resolveNic(preferred) {
   const candidates = []
   if (preferred && isNicName(preferred.trim())) candidates.push(preferred.trim())
@@ -185,7 +215,7 @@ ipcMain.handle('connect-vpn', async (_event, lease) => {
   await prepareDesktop()
   const nic = await resolveNic(lease.nicName)
   const account = `WEL-${lease.username}`
-  const server = `${lease.host}:${lease.port}`
+  const server = resolveVpnServer(lease)
   await runVpncmd(['localhost', '/CLIENT', '/CMD', 'AccountDelete', account]).catch(() => {})
   await runVpncmd(['localhost', '/CLIENT', '/CMD', 'AccountCreate', account, `/SERVER:${server}`, `/HUB:${lease.hub}`, `/USERNAME:${lease.username}`, `/NICNAME:${nic}`])
   await runVpncmd(['localhost', '/CLIENT', '/CMD', 'AccountPasswordSet', account, `/PASSWORD:${lease.password}`, '/TYPE:standard'])
