@@ -13,6 +13,8 @@ jobs:
     env:
       RUST_TOOLCHAIN: 1.77.2
       RUST_TARGET: x86_64-pc-windows-msvc
+      CARGO_HOME: ${{ runner.temp }}\cargo
+      CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
 
     defaults:
       run:
@@ -39,6 +41,17 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ env.RUST_TARGET }}
+
+      - name: Isolate Cargo registry
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:CARGO_HOME | Out-Null
+          @"
+          [registries.crates-io]
+          protocol = "sparse"
+          "@ | Set-Content -Path (Join-Path $env:CARGO_HOME 'config.toml')
+          Write-Host "CARGO_HOME=$env:CARGO_HOME"
+          cargo --version
 
       - name: Install NSIS
         run: choco install nsis -y --no-progress
