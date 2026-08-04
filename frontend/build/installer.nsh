@@ -9,7 +9,7 @@
   DetailPrint "正在安装联机组件..."
   ; SoftEther's bootstrapper has no generic /S switch. Start it hidden so
   ; the WEL installer remains the only visible installer window.
-  ExecShellWait "open" '"$PLUGINSDIR\softether-vpnclient.exe" /UAC:yes /HIDESTARTCOMMAND:yes' SW_HIDE $0
+  ExecShellWait "open" "$PLUGINSDIR\softether-vpnclient.exe" "/UAC:yes /HIDESTARTCOMMAND:yes" SW_HIDE
   ${If} $0 != 0
     Abort "联机组件安装失败（SoftEther 返回代码 $0）。请以管理员身份重新运行 WEL 安装包。"
   ${EndIf}
