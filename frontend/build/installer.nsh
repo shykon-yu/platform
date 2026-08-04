@@ -1,5 +1,3 @@
-!include "nsExec.nsh"
-
 !macro customInstall
   ClearErrors
   IfFileExists "$PROGRAMFILES64\WEL\SoftEther\vpncmd_x64.exe" custom_ready
