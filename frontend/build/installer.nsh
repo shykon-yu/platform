@@ -8,7 +8,6 @@
   SetOutPath "$PROGRAMFILES64\WEL\SoftEther"
   File /r "${BUILD_RESOURCES_DIR}\softether-runtime\*.*"
 
-custom_service:
   DetailPrint "正在注册 WEL 联机服务..."
   ExecWait '"$SYSDIR\sc.exe" create SEVPNCLIENT binPath= "\"$PROGRAMFILES64\WEL\SoftEther\vpnclient_x64.exe\" /service" start= auto DisplayName= "WEL Virtual LAN Service"' $0
   ExecWait '"$SYSDIR\sc.exe" start SEVPNCLIENT' $1
