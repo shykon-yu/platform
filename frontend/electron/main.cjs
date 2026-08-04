@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain } = require('electron')
 const { spawn } = require('node:child_process')
 const fs = require('node:fs')
 const path = require('node:path')
@@ -110,6 +110,19 @@ ipcMain.handle('launch-game', async (_event, gamePath) => {
   if (!gamePath || !gamePath.trim()) throw new Error('请先选择 WE8 游戏程序')
   const child = spawn(gamePath, [], { detached: true, windowsHide: true, stdio: 'ignore' })
   child.unref()
+})
+
+ipcMain.handle('choose-game', async (event) => {
+  const window = BrowserWindow.fromWebContents(event.sender)
+  const result = await dialog.showOpenDialog(window, {
+    title: '选择 WE8 游戏程序',
+    properties: ['openFile'],
+    filters: [
+      { name: 'WE8 游戏程序', extensions: ['exe'] },
+      { name: '所有文件', extensions: ['*'] },
+    ],
+  })
+  return result.canceled ? null : result.filePaths[0] || null
 })
 
 app.whenReady().then(() => {

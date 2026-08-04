@@ -139,7 +139,19 @@ function saveGamePath() {
   notice.value = '游戏路径已保存'
 }
 async function chooseGame() {
-  notice.value = '请在输入框中填写 WE8 主程序完整路径'
+  errorMessage.value = ''
+  if (!desktop()) {
+    notice.value = '浏览器预览不会弹出本机文件选择器，请在 Windows Electron 客户端测试'
+    return
+  }
+  try {
+    const selectedPath = await desktop()?.chooseGame()
+    if (!selectedPath) return
+    gamePath.value = selectedPath
+    saveGamePath()
+  } catch (error) {
+    errorMessage.value = messageOf(error)
+  }
 }
 async function launchGame() {
   errorMessage.value = ''
