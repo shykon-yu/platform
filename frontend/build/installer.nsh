@@ -1,19 +1,16 @@
 !macro customInstall
   ClearErrors
-  IfFileExists "$PROGRAMFILES64\WEL\SoftEther\vpncmd_x64.exe" custom_service
   IfFileExists "$PROGRAMFILES64\SoftEther VPN Client\vpncmd.exe" official_ready
 
-  SetOutPath "$PROGRAMFILES64\WEL\SoftEther"
-  File "${BUILD_RESOURCES_DIR}\softether-runtime\vpnclient_x64.exe"
-  File "${BUILD_RESOURCES_DIR}\softether-runtime\vpncmd_x64.exe"
-  File "${BUILD_RESOURCES_DIR}\softether-runtime\hamcore.se2"
-
-custom_service:
-  DetailPrint "正在注册 WEL 联机服务..."
-  ExecWait '"$SYSDIR\sc.exe" create SEVPNCLIENT binPath= "\"$PROGRAMFILES64\WEL\SoftEther\vpnclient_x64.exe\" /service" start= auto DisplayName= "WEL Virtual LAN Service"' $0
-  ExecWait '"$SYSDIR\sc.exe" start SEVPNCLIENT' $1
+  DetailPrint "正在安装 WEL 联机驱动..."
+  ExecWait '"$SYSDIR\sc.exe" stop SEVPNCLIENT' $0
+  ExecWait '"$SYSDIR\sc.exe" delete SEVPNCLIENT' $1
+  InitPluginsDir
+  SetOutPath "$PLUGINSDIR"
+  File "/oname=softether-client-setup.exe" "${BUILD_RESOURCES_DIR}\softether-vpnclient-v4.42-9798-rtm-2023.06.30-windows-x86_x64-intel.exe"
+  ExecWait '"$PLUGINSDIR\softether-client-setup.exe" /install /silent /HIDESTARTCOMMAND' $2
   Sleep 5000
-  WriteRegDWORD HKLM "Software\WEL\SoftEther" "ManagedByWel" 1
+  WriteRegDWORD HKLM "Software\WEL\SoftEther" "ManagedOfficialClientByWel" 1
   Goto firewall_rules
 
 official_ready:
