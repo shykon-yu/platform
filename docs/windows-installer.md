@@ -16,7 +16,7 @@
 
 - WEL 职业联盟对战平台主程序
 - Electron 22 桌面壳，用于兼容 Windows 7
-- SoftEther VPN Client
+- SoftEther VPN Client 运行核心
 - SoftEther 虚拟网卡驱动
 - 必要的虚拟网卡和防火墙配置
 - WE8 启动入口和路径选择能力
@@ -95,12 +95,12 @@
 - 客户端已具备桌面状态检测入口
 - 前端通过 Electron preload 暴露的 `window.we8Desktop` 调用本机能力
 - electron-builder NSIS 安装器已经接入 `build/installer.nsh`
-- 构建时会下载 SoftEther 安装文件到 `frontend/build`，由 NSIS 安装阶段直接执行
+- 构建时会下载 SoftEther 安装文件到 `frontend/build`，并提取运行核心供 NSIS 直接部署
 - 安装前会明确提示管理员授权与联机限制
 
 ### 仍需完成
 
-- 在 NSIS 安装阶段执行 SoftEther Client 安装
+- 在 NSIS 安装阶段直接部署 SoftEther Client 运行核心
 - 安装阶段创建 `VPN` 虚拟网卡
 - 安装阶段写入仅允许 `10.80.0.0/16` ICMPv4 的防火墙规则
 - 安装失败回滚
@@ -110,11 +110,12 @@
 
 最稳的实现路线是：
 
-1. 构建阶段下载 SoftEther Client 安装文件
-2. NSIS 安装阶段执行 SoftEther Client 安装
-3. 安装阶段创建虚拟网卡并写入防火墙规则
-4. 首次启动时只做状态检测，不再弹 SoftEther 安装提示
-5. 进入房间前如果组件未准备好，明确提示重新运行完整安装包
+1. 构建阶段下载 SoftEther Client 安装文件并提取运行核心
+2. NSIS 安装阶段复制 `vpnclient_x64.exe`、`vpncmd_x64.exe` 和 `hamcore.se2`
+3. 安装阶段注册并启动 `SEVPNCLIENT` 服务
+4. 安装阶段创建虚拟网卡并写入防火墙规则
+5. 首次启动时只做状态检测，不再弹 SoftEther 安装提示
+6. 进入房间前如果组件未准备好，明确提示重新运行完整安装包
 
 ## 当前接入点
 
@@ -129,7 +130,7 @@ frontend/build/installer.nsh
 frontend/scripts/download-softether.cjs
 ```
 
-执行 `npm run electron:build` 时会先下载 SoftEther Windows 安装文件，然后 NSIS 安装器会在安装阶段执行它。进入房间时不再安装 SoftEther，只检查安装状态并调用 `vpncmd.exe`。
+执行 `npm run electron:build` 时会先下载 SoftEther Windows 安装文件，再从安装包资源区提取客户端运行核心。NSIS 安装器不会启动 SoftEther 官方安装向导，而是直接注册 WEL 的 `SEVPNCLIENT` 服务。进入房间时只检查安装状态并调用 `vpncmd_x64.exe`。
 
 ## 备注
 

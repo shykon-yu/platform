@@ -9,7 +9,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "vue-tsc --noEmit && vite build",
     "electron:dev": "npm run build && electron electron/main.cjs",
-    "electron:build": "npm run build && node scripts/download-softether.cjs && electron-builder --win nsis",
+    "electron:build": "npm run build && node scripts/download-softether.cjs && node scripts/extract-softether-runtime.cjs && electron-builder --win nsis",
     "electron": "electron"
   },
   "dependencies": {
