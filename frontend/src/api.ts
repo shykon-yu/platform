@@ -10,7 +10,7 @@ type SessionResponse = { token: string; user: User }
 let token = localStorage.getItem(ACCESS_TOKEN_KEY) ?? localStorage.getItem(LEGACY_ACCESS_TOKEN_KEY) ?? ''
 
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(message: string, readonly status: number, readonly code?: string) {
     super(message)
     this.name = 'ApiError'
   }
@@ -28,18 +28,23 @@ export function clearToken() {
   localStorage.removeItem(LEGACY_ACCESS_TOKEN_KEY)
 }
 
+export function hasToken() {
+  return token !== ''
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers)
   headers.set('Content-Type', 'application/json')
   if (token) headers.set('Authorization', `Bearer ${token}`)
   const response = await fetch(`${apiBase}${path}`, { ...options, headers })
   const body = await response.json().catch(() => ({}))
-  if (!response.ok) throw new ApiError(body.error ?? '请求失败，请稍后重试', response.status)
+  if (!response.ok) throw new ApiError(body.error ?? '请求失败，请稍后重试', response.status, body.code)
   return body as T
 }
 
 export const authApi = {
   login: (payload: { username: string; password: string }) => request<SessionResponse>('/auth/login', { method: 'POST', body: JSON.stringify(payload) }),
+  logout: () => request<{ ok: boolean }>('/auth/logout', { method: 'POST' }),
   me: () => request<{ user: User }>('/me'),
   roomSession: () => request<{ lease: Lease | null }>('/me/room-session'),
 }

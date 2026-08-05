@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ClipboardCopy, FolderOpen, Gamepad2, LogOut, Play, RefreshCw, Router, ShieldCheck, Users } from 'lucide-vue-next'
-import { ApiError, authApi, clearToken, roomApi, setToken, type Lease, type Room, type User } from './api'
+import { ApiError, authApi, clearToken, hasToken, roomApi, setToken, type Lease, type Room, type User } from './api'
 import type { DesktopLeaseStatus } from './electron'
 import packageInfo from '../package.json'
 
@@ -50,7 +50,10 @@ const connectionTitle = computed(() => {
 const gamePathLabel = computed(() => gamePath.value.trim() || '未选择 WE8 游戏程序')
 const desktop = () => window.we8Desktop
 const heartbeatIntervalMs = 5 * 60 * 1000
+const sessionCheckIntervalMs = 30 * 1000
 let heartbeatTimer: number | undefined
+let sessionCheckTimer: number | undefined
+let signingOut = false
 
 function stopLeaseHeartbeat() {
   if (heartbeatTimer !== undefined) window.clearInterval(heartbeatTimer)
@@ -62,6 +65,45 @@ function startLeaseHeartbeat() {
   if (!activeLease.value) return
   void renewLease()
   heartbeatTimer = window.setInterval(() => { void renewLease() }, heartbeatIntervalMs)
+}
+
+function stopSessionMonitor() {
+  if (sessionCheckTimer !== undefined) window.clearInterval(sessionCheckTimer)
+  sessionCheckTimer = undefined
+}
+
+function startSessionMonitor() {
+  stopSessionMonitor()
+  if (!user.value) return
+  sessionCheckTimer = window.setInterval(() => { void checkSession() }, sessionCheckIntervalMs)
+}
+
+async function checkSession() {
+  if (!user.value || signingOut) return
+  try {
+    await authApi.me()
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401) await forceSignedOut(error.message)
+  }
+}
+
+async function forceSignedOut(message: string) {
+  if (signingOut) return
+  signingOut = true
+  stopLeaseHeartbeat()
+  stopSessionMonitor()
+  const lease = activeLease.value
+  if (lease) {
+    try { await desktop()?.disconnectVpn(lease.username) } catch { /* the server has already revoked this session */ }
+  }
+  activeLease.value = null
+  networkStatus.value = null
+  user.value = null
+  rooms.value = []
+  clearToken()
+  notice.value = ''
+  errorMessage.value = message
+  signingOut = false
 }
 
 async function refreshDesktopStatus() {
@@ -93,6 +135,10 @@ async function renewLease() {
     const result = await roomApi.heartbeat(lease.room_id)
     if (activeLease.value?.room_id === lease.room_id) activeLease.value.expires_at = result.expires_at
   } catch (error) {
+    if (error instanceof ApiError && error.status === 401) {
+      await forceSignedOut(error.message)
+      return
+    }
     if (error instanceof ApiError && (error.status === 404 || error.status === 409)) {
       stopLeaseHeartbeat()
       try { await desktop()?.disconnectVpn(lease.username) } catch { /* local connection may already be gone */ }
@@ -123,15 +169,18 @@ async function authenticate() {
     activeLease.value = (await authApi.roomSession()).lease
     startLeaseHeartbeat()
     await loadRooms()
+    startSessionMonitor()
   } catch (error) { errorMessage.value = messageOf(error) } finally { loading.value = false }
 }
 
 async function restoreSession() {
+  if (!hasToken()) return
   try {
     user.value = (await authApi.me()).user
     activeLease.value = (await authApi.roomSession()).lease
-  } catch {
+  } catch (error) {
     clearToken()
+    if (error instanceof ApiError && error.status === 401) errorMessage.value = error.message
     return
   }
 
@@ -154,6 +203,7 @@ async function restoreSession() {
     }
   }
   startLeaseHeartbeat()
+  startSessionMonitor()
 }
 
 function connectDesktopVpn(lease: Lease) {
@@ -183,6 +233,10 @@ async function joinRoom(room: Room) {
     notice.value = '已进入房间'
     await loadRooms()
   } catch (error) {
+    if (error instanceof ApiError && error.status === 401) {
+      await forceSignedOut(error.message)
+      return
+    }
     stopLeaseHeartbeat()
     if (lease) {
       try { await desktop()?.disconnectVpn(lease.username) } catch { /* connection setup may be incomplete */ }
@@ -286,8 +340,16 @@ async function logout() {
     await releaseActiveLease()
   } catch {
     errorMessage.value = '房间清理未完全成功，服务器将在超时后自动回收'
+  }
+  try {
+    await authApi.logout()
+  } catch (error) {
+    if (!(error instanceof ApiError && error.status === 401)) {
+      errorMessage.value ||= '服务器登录状态未完全清理，将在有效期结束后自动失效'
+    }
   } finally {
     stopLeaseHeartbeat()
+    stopSessionMonitor()
     user.value = null
     networkStatus.value = null
     clearToken()
@@ -303,7 +365,10 @@ function messageOf(error: unknown) {
 
 onMounted(restoreSession)
 onMounted(refreshDesktopStatus)
-onBeforeUnmount(stopLeaseHeartbeat)
+onBeforeUnmount(() => {
+  stopLeaseHeartbeat()
+  stopSessionMonitor()
+})
 </script>
 
 <template>

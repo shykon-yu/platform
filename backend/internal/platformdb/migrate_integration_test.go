@@ -94,4 +94,17 @@ func TestMigrateLegacySchema(t *testing.T) {
 	if referencedTable != "platform_users" {
 		t.Fatalf("room_ip_leases.user_id references %q", referencedTable)
 	}
+
+	for table, column := range map[string]string{
+		"platform_users":  "active_session_id",
+		"room_ip_leases": "session_id",
+	} {
+		exists, err := columnExists(ctx, db, table, column)
+		if err != nil {
+			t.Fatalf("check %s.%s: %v", table, column, err)
+		}
+		if !exists {
+			t.Fatalf("migration did not add %s.%s", table, column)
+		}
+	}
 }

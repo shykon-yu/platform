@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -95,7 +96,7 @@ func TestIssueTokenDoesNotOutlivePlatformAccess(t *testing.T) {
 	accessExpiresAt := time.Now().Add(15 * time.Minute).Truncate(time.Second)
 	a := &app{config: config{jwtSecret: "test-secret"}}
 
-	tokenString, err := a.issueToken(user{ID: 42, PlatformAccessExpiresAt: accessExpiresAt})
+	tokenString, err := a.issueToken(user{ID: 42, SessionID: "current-session", PlatformAccessExpiresAt: accessExpiresAt})
 	if err != nil {
 		t.Fatalf("issueToken() error = %v", err)
 	}
@@ -112,15 +113,23 @@ func TestIssueTokenDoesNotOutlivePlatformAccess(t *testing.T) {
 }
 
 func TestAuthRequiresPlatformIssuer(t *testing.T) {
-	a := &app{config: config{jwtSecret: "test-secret"}}
+	a := &app{
+		config: config{jwtSecret: "test-secret"},
+		validateSession: func(_ context.Context, userID int64, sessionID string) (bool, error) {
+			return userID == 42 && sessionID == "current-session", nil
+		},
+	}
 	protected := a.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if currentUserID(r) != 42 {
 			t.Fatalf("currentUserID() = %d", currentUserID(r))
 		}
+		if currentSessionID(r) != "current-session" {
+			t.Fatalf("currentSessionID() = %q", currentSessionID(r))
+		}
 		w.WriteHeader(http.StatusNoContent)
 	}))
 
-	validToken, err := a.issueToken(user{ID: 42})
+	validToken, err := a.issueToken(user{ID: 42, SessionID: "current-session"})
 	if err != nil {
 		t.Fatalf("issueToken() error = %v", err)
 	}
@@ -148,6 +157,32 @@ func TestAuthRequiresPlatformIssuer(t *testing.T) {
 	protected.ServeHTTP(legacyResponse, legacyRequest)
 	if legacyResponse.Code != http.StatusUnauthorized {
 		t.Fatalf("legacy token status = %d, want %d", legacyResponse.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestAuthRejectsReplacedSession(t *testing.T) {
+	a := &app{
+		config: config{jwtSecret: "test-secret"},
+		validateSession: func(_ context.Context, _ int64, _ string) (bool, error) {
+			return false, nil
+		},
+	}
+	protected := a.auth(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Fatal("replaced session reached protected handler")
+	}))
+	token, err := a.issueToken(user{ID: 42, SessionID: "old-session"})
+	if err != nil {
+		t.Fatalf("issueToken() error = %v", err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	response := httptest.NewRecorder()
+	protected.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("replaced session status = %d, want %d", response.Code, http.StatusUnauthorized)
+	}
+	if body := response.Body.String(); !strings.Contains(body, `"code":"SESSION_REPLACED"`) {
+		t.Fatalf("replaced session body = %s", body)
 	}
 }
 

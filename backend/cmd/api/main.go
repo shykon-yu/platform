@@ -45,10 +45,12 @@ type app struct {
 	http     *http.Client
 	upgrader websocket.Upgrader
 	vpn      vpn.Provisioner
+	validateSession func(context.Context, int64, string) (bool, error)
 }
 
 type claims struct {
-	UserID int64 `json:"uid"`
+	UserID    int64  `json:"uid"`
+	SessionID string `json:"sid"`
 	jwt.RegisteredClaims
 }
 
@@ -58,6 +60,7 @@ type user struct {
 	Username                string    `json:"username"`
 	Nickname                string    `json:"nickname"`
 	PlatformAccessExpiresAt time.Time `json:"-"`
+	SessionID               string    `json:"-"`
 }
 
 type soccerAuthResponse struct {
@@ -167,6 +170,7 @@ func main() {
 		r.Post("/auth/login", a.login)
 		r.Group(func(r chi.Router) {
 			r.Use(a.auth)
+			r.Post("/auth/logout", a.logout)
 			r.Get("/me", a.me)
 			r.Get("/me/room-session", a.roomSession)
 			r.Get("/rooms", a.listRooms)
@@ -312,6 +316,17 @@ func (a *app) login(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusForbidden, "平台账号已被禁用")
 		return
 	}
+	sessionID, err := randomSecret(32)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "无法创建登录会话")
+		return
+	}
+	if err := a.activateSession(r.Context(), u.ID, sessionID); err != nil {
+		a.logger.Error("activate login session", "user_id", u.ID, "error", err)
+		respondError(w, http.StatusInternalServerError, "无法创建登录会话")
+		return
+	}
+	u.SessionID = sessionID
 	a.respondSession(w, u)
 }
 
@@ -431,6 +446,9 @@ func (a *app) respondSession(w http.ResponseWriter, u user) {
 	respondJSON(w, http.StatusOK, map[string]any{"token": token, "user": u})
 }
 func (a *app) issueToken(u user) (string, error) {
+	if u.SessionID == "" {
+		return "", errors.New("missing login session ID")
+	}
 	issuedAt := time.Now()
 	expiresAt := issuedAt.Add(24 * time.Hour)
 	if !u.PlatformAccessExpiresAt.IsZero() && u.PlatformAccessExpiresAt.Before(expiresAt) {
@@ -439,7 +457,124 @@ func (a *app) issueToken(u user) (string, error) {
 	if !expiresAt.After(issuedAt) {
 		return "", errSoccerPlatformExpired
 	}
-	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims{UserID: u.ID, RegisteredClaims: jwt.RegisteredClaims{Issuer: jwtIssuer, Subject: strconv.FormatInt(u.ID, 10), ExpiresAt: jwt.NewNumericDate(expiresAt), IssuedAt: jwt.NewNumericDate(issuedAt)}}).SignedString([]byte(a.config.jwtSecret))
+	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims{UserID: u.ID, SessionID: u.SessionID, RegisteredClaims: jwt.RegisteredClaims{Issuer: jwtIssuer, Subject: strconv.FormatInt(u.ID, 10), ExpiresAt: jwt.NewNumericDate(expiresAt), IssuedAt: jwt.NewNumericDate(issuedAt)}}).SignedString([]byte(a.config.jwtSecret))
+}
+
+type leaseCredential struct {
+	hub, username string
+}
+
+func (a *app) activateSession(ctx context.Context, userID int64, sessionID string) error {
+	tx, err := a.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var status string
+	if err := tx.QueryRowContext(ctx, "SELECT status FROM platform_users WHERE id = ? FOR UPDATE", userID).Scan(&status); err != nil {
+		return err
+	}
+	if status != "active" {
+		return errors.New("platform account is not active")
+	}
+	credentials, err := sessionLeaseCredentials(ctx, tx, userID, "")
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM room_ip_leases WHERE user_id = ?", userID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE platform_users SET active_session_id = ? WHERE id = ?", sessionID, userID); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	a.revokeCredentials(ctx, userID, credentials)
+	return nil
+}
+
+func (a *app) endSession(ctx context.Context, userID int64, sessionID string) error {
+	tx, err := a.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var activeSession sql.NullString
+	if err := tx.QueryRowContext(ctx, "SELECT active_session_id FROM platform_users WHERE id = ? FOR UPDATE", userID).Scan(&activeSession); err != nil {
+		return err
+	}
+	if !activeSession.Valid || activeSession.String != sessionID {
+		return nil
+	}
+	credentials, err := sessionLeaseCredentials(ctx, tx, userID, sessionID)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM room_ip_leases WHERE user_id = ? AND session_id = ?", userID, sessionID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE platform_users SET active_session_id = NULL WHERE id = ? AND active_session_id = ?", userID, sessionID); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	a.revokeCredentials(ctx, userID, credentials)
+	return nil
+}
+
+func sessionLeaseCredentials(ctx context.Context, tx *sql.Tx, userID int64, sessionID string) ([]leaseCredential, error) {
+	query := `
+		SELECT r.hub_name, l.softether_username
+		FROM room_ip_leases l
+		INNER JOIN rooms r ON r.id = l.room_id
+		WHERE l.user_id = ?`
+	args := []any{userID}
+	if sessionID != "" {
+		query += " AND l.session_id = ?"
+		args = append(args, sessionID)
+	}
+	query += " FOR UPDATE"
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	credentials := make([]leaseCredential, 0)
+	for rows.Next() {
+		var item leaseCredential
+		if err := rows.Scan(&item.hub, &item.username); err != nil {
+			return nil, err
+		}
+		credentials = append(credentials, item)
+	}
+	return credentials, rows.Err()
+}
+
+func (a *app) revokeCredentials(ctx context.Context, userID int64, credentials []leaseCredential) {
+	for _, credential := range credentials {
+		if err := a.vpn.Revoke(ctx, credential.hub, credential.username); err != nil {
+			a.logger.Error("revoke replaced session credential", "user_id", userID, "hub", credential.hub, "username", credential.username, "error", err)
+		}
+	}
+}
+
+func (a *app) isSessionCurrent(ctx context.Context, userID int64, sessionID string) (bool, error) {
+	if a.validateSession != nil {
+		return a.validateSession(ctx, userID, sessionID)
+	}
+	var activeSession sql.NullString
+	err := a.db.QueryRowContext(ctx, "SELECT active_session_id FROM platform_users WHERE id = ? AND status = 'active'", userID).Scan(&activeSession)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return activeSession.Valid && activeSession.String == sessionID, nil
 }
 
 func (a *app) auth(next http.Handler) http.Handler {
@@ -452,21 +587,52 @@ func (a *app) auth(next http.Handler) http.Handler {
 			return []byte(a.config.jwtSecret), nil
 		}, jwt.WithIssuer(jwtIssuer), jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
 		if err != nil || !token.Valid {
-			respondError(w, http.StatusUnauthorized, "登录已失效")
+			respondErrorCode(w, http.StatusUnauthorized, "AUTH_INVALID", "登录已失效，请重新登录")
 			return
 		}
 		c, ok := token.Claims.(*claims)
-		if !ok {
-			respondError(w, http.StatusUnauthorized, "登录已失效")
+		if !ok || c.UserID == 0 || c.SessionID == "" {
+			respondErrorCode(w, http.StatusUnauthorized, "AUTH_INVALID", "登录已失效，请重新登录")
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userIDKey{}, c.UserID)))
+		current, err := a.isSessionCurrent(r.Context(), c.UserID, c.SessionID)
+		if err != nil {
+			a.logger.Error("validate login session", "user_id", c.UserID, "error", err)
+			respondError(w, http.StatusServiceUnavailable, "暂时无法验证登录状态")
+			return
+		}
+		if !current {
+			respondErrorCode(w, http.StatusUnauthorized, "SESSION_REPLACED", "账号已在其他设备登录")
+			return
+		}
+		ctx := context.WithValue(r.Context(), authIdentityKey{}, authIdentity{UserID: c.UserID, SessionID: c.SessionID})
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-type userIDKey struct{}
+type authIdentity struct {
+	UserID    int64
+	SessionID string
+}
 
-func currentUserID(r *http.Request) int64 { id, _ := r.Context().Value(userIDKey{}).(int64); return id }
+type authIdentityKey struct{}
+
+func currentIdentity(r *http.Request) authIdentity {
+	identity, _ := r.Context().Value(authIdentityKey{}).(authIdentity)
+	return identity
+}
+
+func currentUserID(r *http.Request) int64    { return currentIdentity(r).UserID }
+func currentSessionID(r *http.Request) string { return currentIdentity(r).SessionID }
+
+func (a *app) logout(w http.ResponseWriter, r *http.Request) {
+	if err := a.endSession(r.Context(), currentUserID(r), currentSessionID(r)); err != nil {
+		a.logger.Error("end login session", "user_id", currentUserID(r), "error", err)
+		respondError(w, http.StatusInternalServerError, "无法退出登录")
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
 
 func (a *app) me(w http.ResponseWriter, r *http.Request) {
 	var u user
@@ -479,8 +645,8 @@ func (a *app) me(w http.ResponseWriter, r *http.Request) {
 }
 func (a *app) roomSession(w http.ResponseWriter, r *http.Request) {
 	var current lease
-	query := "SELECT l.room_id, l.virtual_ip, l.softether_username, r.hub_name, r.subnet_cidr, l.credential_expires_at FROM room_ip_leases l INNER JOIN rooms r ON r.id = l.room_id WHERE l.user_id = ? AND l.released_at IS NULL ORDER BY l.id DESC LIMIT 1"
-	err := a.db.QueryRowContext(r.Context(), query, currentUserID(r)).Scan(&current.RoomID, &current.VirtualIP, &current.Username, &current.HubName, &current.SubnetCIDR, &current.ExpiresAt)
+	query := "SELECT l.room_id, l.virtual_ip, l.softether_username, r.hub_name, r.subnet_cidr, l.credential_expires_at FROM room_ip_leases l INNER JOIN rooms r ON r.id = l.room_id WHERE l.user_id = ? AND l.session_id = ? AND l.released_at IS NULL ORDER BY l.id DESC LIMIT 1"
+	err := a.db.QueryRowContext(r.Context(), query, currentUserID(r), currentSessionID(r)).Scan(&current.RoomID, &current.VirtualIP, &current.Username, &current.HubName, &current.SubnetCIDR, &current.ExpiresAt)
 	if err == sql.ErrNoRows {
 		respondJSON(w, http.StatusOK, map[string]any{"lease": nil})
 		return
@@ -532,6 +698,19 @@ func (a *app) getRoom(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, 200, map[string]any{"room": item})
 }
 
+func sessionCurrentForUpdate(ctx context.Context, tx *sql.Tx, userID int64, sessionID string) (bool, error) {
+	var activeSession sql.NullString
+	var status string
+	err := tx.QueryRowContext(ctx, "SELECT active_session_id, status FROM platform_users WHERE id = ? FOR UPDATE", userID).Scan(&activeSession, &status)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return status == "active" && activeSession.Valid && activeSession.String == sessionID, nil
+}
+
 func (a *app) joinRoom(w http.ResponseWriter, r *http.Request) {
 	roomID, ok := roomIDFromRequest(w, r)
 	if !ok {
@@ -544,6 +723,15 @@ func (a *app) joinRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
+	current, err := sessionCurrentForUpdate(r.Context(), tx, userID, currentSessionID(r))
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "无法验证登录状态")
+		return
+	}
+	if !current {
+		respondErrorCode(w, http.StatusUnauthorized, "SESSION_REPLACED", "账号已在其他设备登录")
+		return
+	}
 	var hub, subnet, start, end, status string
 	var capacity int
 	err = tx.QueryRowContext(r.Context(), "SELECT hub_name, subnet_cidr, ip_start, ip_end, status, capacity FROM rooms WHERE id = ? FOR UPDATE", roomID).Scan(&hub, &subnet, &start, &end, &status, &capacity)
@@ -559,17 +747,8 @@ func (a *app) joinRoom(w http.ResponseWriter, r *http.Request) {
 		respondError(w, 409, "房间暂不可进入")
 		return
 	}
-	var members int
-	if err := tx.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM room_ip_leases WHERE room_id = ? AND released_at IS NULL", roomID).Scan(&members); err != nil {
-		respondError(w, 500, "无法进入房间")
-		return
-	}
-	if members >= capacity {
-		respondError(w, 409, "房间已满")
-		return
-	}
 	var existingIP, existingUsername string
-	err = tx.QueryRowContext(r.Context(), "SELECT virtual_ip, softether_username FROM room_ip_leases WHERE room_id = ? AND user_id = ? AND released_at IS NULL ORDER BY id DESC LIMIT 1", roomID, userID).Scan(&existingIP, &existingUsername)
+	err = tx.QueryRowContext(r.Context(), "SELECT virtual_ip, softether_username FROM room_ip_leases WHERE room_id = ? AND user_id = ? AND session_id = ? AND released_at IS NULL ORDER BY id DESC LIMIT 1", roomID, userID, currentSessionID(r)).Scan(&existingIP, &existingUsername)
 	if err == nil {
 		password, secretErr := randomSecret(24)
 		if secretErr != nil {
@@ -577,12 +756,8 @@ func (a *app) joinRoom(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		expiresAt := time.Now().Add(leaseTTL)
-		if _, updateErr := tx.ExecContext(r.Context(), "UPDATE room_ip_leases SET credential_expires_at = ? WHERE room_id = ? AND user_id = ? AND released_at IS NULL", expiresAt, roomID, userID); updateErr != nil {
+		if _, updateErr := tx.ExecContext(r.Context(), "UPDATE room_ip_leases SET credential_expires_at = ? WHERE room_id = ? AND user_id = ? AND session_id = ? AND released_at IS NULL", expiresAt, roomID, userID, currentSessionID(r)); updateErr != nil {
 			respondError(w, 500, "无法刷新连接凭据")
-			return
-		}
-		if commitErr := tx.Commit(); commitErr != nil {
-			respondError(w, 500, "无法进入房间")
 			return
 		}
 		credential := vpn.Credential{Hub: hub, Username: existingUsername, Password: password, ExpiresAt: expiresAt}
@@ -590,11 +765,25 @@ func (a *app) joinRoom(w http.ResponseWriter, r *http.Request) {
 			respondError(w, 502, "无法创建虚拟网络凭据")
 			return
 		}
+		if commitErr := tx.Commit(); commitErr != nil {
+			_ = a.vpn.Revoke(r.Context(), hub, existingUsername)
+			respondError(w, 500, "无法进入房间")
+			return
+		}
 		respondJSON(w, 200, map[string]any{"lease": lease{RoomID: roomID, VirtualIP: existingIP, Username: existingUsername, Password: password, HubName: hub, SubnetCIDR: subnet, ExpiresAt: expiresAt, ServerHost: a.config.softEtherClientHost, ServerPort: a.config.softEtherClientPort}})
 		return
 	}
 	if err != sql.ErrNoRows {
 		respondError(w, 500, "无法进入房间")
+		return
+	}
+	var members int
+	if err := tx.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM room_ip_leases WHERE room_id = ? AND released_at IS NULL", roomID).Scan(&members); err != nil {
+		respondError(w, 500, "无法进入房间")
+		return
+	}
+	if members >= capacity {
+		respondError(w, 409, "房间已满")
 		return
 	}
 	ip, err := nextFreeIP(r.Context(), tx, roomID, start, end)
@@ -609,18 +798,18 @@ func (a *app) joinRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	expiresAt := time.Now().Add(leaseTTL)
-	if _, err := tx.ExecContext(r.Context(), "INSERT INTO room_ip_leases (room_id, user_id, virtual_ip, softether_username, credential_expires_at) VALUES (?, ?, ?, ?, ?)", roomID, userID, ip, username, expiresAt); err != nil {
+	if _, err := tx.ExecContext(r.Context(), "INSERT INTO room_ip_leases (room_id, user_id, session_id, virtual_ip, softether_username, credential_expires_at) VALUES (?, ?, ?, ?, ?, ?)", roomID, userID, currentSessionID(r), ip, username, expiresAt); err != nil {
 		respondError(w, 500, "无法分配虚拟地址")
-		return
-	}
-	if err := tx.Commit(); err != nil {
-		respondError(w, 500, "无法进入房间")
 		return
 	}
 	credential := vpn.Credential{Hub: hub, Username: username, Password: password, ExpiresAt: expiresAt}
 	if provisionErr := a.vpn.Provision(r.Context(), credential); provisionErr != nil {
-		_, _ = a.db.ExecContext(r.Context(), "DELETE FROM room_ip_leases WHERE room_id = ? AND user_id = ? AND released_at IS NULL", roomID, userID)
 		respondError(w, 502, "无法创建虚拟网络凭据")
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		_ = a.vpn.Revoke(r.Context(), hub, username)
+		respondError(w, 500, "无法进入房间")
 		return
 	}
 	respondJSON(w, 200, map[string]any{"lease": lease{RoomID: roomID, VirtualIP: ip, Username: username, Password: password, HubName: hub, SubnetCIDR: subnet, ExpiresAt: expiresAt, ServerHost: a.config.softEtherClientHost, ServerPort: a.config.softEtherClientPort}})
@@ -632,16 +821,33 @@ func (a *app) heartbeatRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userID := currentUserID(r)
+	sessionID := currentSessionID(r)
+	tx, err := a.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "无法续期房间连接")
+		return
+	}
+	defer tx.Rollback()
+	current, err := sessionCurrentForUpdate(r.Context(), tx, userID, sessionID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "无法验证登录状态")
+		return
+	}
+	if !current {
+		respondErrorCode(w, http.StatusUnauthorized, "SESSION_REPLACED", "账号已在其他设备登录")
+		return
+	}
 	var leaseID int64
 	var username, hub string
-	err := a.db.QueryRowContext(r.Context(), `
+	err = tx.QueryRowContext(r.Context(), `
 		SELECT l.id, l.softether_username, rooms.hub_name
 		FROM room_ip_leases l
 		INNER JOIN rooms ON rooms.id = l.room_id
-		WHERE l.room_id = ? AND l.user_id = ? AND l.released_at IS NULL
+		WHERE l.room_id = ? AND l.user_id = ? AND l.session_id = ? AND l.released_at IS NULL
 			AND l.credential_expires_at > CURRENT_TIMESTAMP
 		ORDER BY l.id DESC
-		LIMIT 1`, roomID, userID).Scan(&leaseID, &username, &hub)
+		LIMIT 1
+		FOR UPDATE`, roomID, userID, sessionID).Scan(&leaseID, &username, &hub)
 	if err == sql.ErrNoRows {
 		respondError(w, http.StatusConflict, "房间连接已过期，请重新进入")
 		return
@@ -657,17 +863,21 @@ func (a *app) heartbeatRoom(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadGateway, "无法续期虚拟网络凭据")
 		return
 	}
-	result, err := a.db.ExecContext(r.Context(), `
+	result, err := tx.ExecContext(r.Context(), `
 		UPDATE room_ip_leases
 		SET credential_expires_at = ?
-		WHERE id = ? AND room_id = ? AND user_id = ? AND released_at IS NULL
-			AND credential_expires_at > CURRENT_TIMESTAMP`, expiresAt, leaseID, roomID, userID)
+		WHERE id = ? AND room_id = ? AND user_id = ? AND session_id = ? AND released_at IS NULL
+			AND credential_expires_at > CURRENT_TIMESTAMP`, expiresAt, leaseID, roomID, userID, sessionID)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "无法续期房间连接")
 		return
 	}
 	if affected, _ := result.RowsAffected(); affected == 0 {
 		respondError(w, http.StatusConflict, "房间连接已结束，请重新进入")
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		respondError(w, http.StatusInternalServerError, "无法续期房间连接")
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]any{"expires_at": expiresAt})
@@ -679,8 +889,24 @@ func (a *app) leaveRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userID := currentUserID(r)
+	sessionID := currentSessionID(r)
+	tx, err := a.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "无法退出房间")
+		return
+	}
+	defer tx.Rollback()
+	current, err := sessionCurrentForUpdate(r.Context(), tx, userID, sessionID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "无法验证登录状态")
+		return
+	}
+	if !current {
+		respondErrorCode(w, http.StatusUnauthorized, "SESSION_REPLACED", "账号已在其他设备登录")
+		return
+	}
 	var username, hub string
-	err := a.db.QueryRowContext(r.Context(), "SELECT l.softether_username, r.hub_name FROM room_ip_leases l INNER JOIN rooms r ON r.id = l.room_id WHERE l.room_id = ? AND l.user_id = ? AND l.released_at IS NULL ORDER BY l.id DESC LIMIT 1", roomID, userID).Scan(&username, &hub)
+	err = tx.QueryRowContext(r.Context(), "SELECT l.softether_username, r.hub_name FROM room_ip_leases l INNER JOIN rooms r ON r.id = l.room_id WHERE l.room_id = ? AND l.user_id = ? AND l.session_id = ? AND l.released_at IS NULL ORDER BY l.id DESC LIMIT 1 FOR UPDATE", roomID, userID, sessionID).Scan(&username, &hub)
 	if err == sql.ErrNoRows {
 		respondError(w, 404, "你不在该房间内")
 		return
@@ -689,7 +915,11 @@ func (a *app) leaveRoom(w http.ResponseWriter, r *http.Request) {
 		respondError(w, 500, "无法退出房间")
 		return
 	}
-	if _, err = a.db.ExecContext(r.Context(), "DELETE FROM room_ip_leases WHERE room_id = ? AND user_id = ? AND released_at IS NULL", roomID, userID); err != nil {
+	if _, err = tx.ExecContext(r.Context(), "DELETE FROM room_ip_leases WHERE room_id = ? AND user_id = ? AND session_id = ? AND released_at IS NULL", roomID, userID, sessionID); err != nil {
+		respondError(w, 500, "无法退出房间")
+		return
+	}
+	if err := tx.Commit(); err != nil {
 		respondError(w, 500, "无法退出房间")
 		return
 	}
@@ -835,4 +1065,8 @@ func respondJSON(w http.ResponseWriter, status int, value any) {
 }
 func respondError(w http.ResponseWriter, status int, message string) {
 	respondJSON(w, status, map[string]string{"error": message})
+}
+
+func respondErrorCode(w http.ResponseWriter, status int, code, message string) {
+	respondJSON(w, status, map[string]string{"code": code, "error": message})
 }

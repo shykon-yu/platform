@@ -10,6 +10,7 @@ import (
 const (
 	soccerIdentityMigration = "20260803_soccer_identity"
 	sixRoomsMigration       = "20260803_limit_rooms_to_six"
+	singleSessionMigration  = "20260805_single_active_session"
 )
 
 var safeIdentifier = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
@@ -27,6 +28,9 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	if err := runMigration(ctx, db, sixRoomsMigration, migrateLimitRoomsToSix); err != nil {
+		return err
+	}
+	if err := runMigration(ctx, db, singleSessionMigration, migrateSingleActiveSession); err != nil {
 		return err
 	}
 	return nil
@@ -127,6 +131,48 @@ func migrateLimitRoomsToSix(ctx context.Context, db *sql.DB) error {
 	}
 	if _, err := db.ExecContext(ctx, "DELETE FROM rooms WHERE sort_order > 6"); err != nil {
 		return fmt.Errorf("delete hidden rooms: %w", err)
+	}
+	return nil
+}
+
+func migrateSingleActiveSession(ctx context.Context, db *sql.DB) error {
+	hasActiveSession, err := columnExists(ctx, db, "platform_users", "active_session_id")
+	if err != nil {
+		return err
+	}
+	if !hasActiveSession {
+		if _, err := db.ExecContext(ctx, `
+			ALTER TABLE platform_users
+			ADD COLUMN active_session_id VARCHAR(43) NULL AFTER last_login_at`); err != nil {
+			return fmt.Errorf("add platform user active session: %w", err)
+		}
+	}
+
+	hasLeaseSession, err := columnExists(ctx, db, "room_ip_leases", "session_id")
+	if err != nil {
+		return err
+	}
+	if !hasLeaseSession {
+		if _, err := db.ExecContext(ctx, `
+			ALTER TABLE room_ip_leases
+			ADD COLUMN session_id VARCHAR(43) NULL AFTER user_id`); err != nil {
+			return fmt.Errorf("add room lease session: %w", err)
+		}
+	}
+
+	hasCredentialExpiry, err := columnExists(ctx, db, "room_ip_leases", "credential_expires_at")
+	if err != nil {
+		return err
+	}
+	if hasCredentialExpiry {
+		// Tokens issued before this migration have no session ID. Expire their leases
+		// so the normal reaper revokes the corresponding SoftEther credentials.
+		if _, err := db.ExecContext(ctx, `
+			UPDATE room_ip_leases
+			SET credential_expires_at = CURRENT_TIMESTAMP
+			WHERE session_id IS NULL`); err != nil {
+			return fmt.Errorf("expire legacy room leases: %w", err)
+		}
 	}
 	return nil
 }
