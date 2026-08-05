@@ -1,17 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { FolderOpen, Gamepad2, LogOut, Play, RefreshCw, Router, ShieldCheck, Users } from 'lucide-vue-next'
-import { API_BASE_URL, ApiError, authApi, clearToken, roomApi, setToken, type Lease, type Room, type User } from './api'
+import { ApiError, authApi, clearToken, roomApi, setToken, type Lease, type Room, type User } from './api'
 
-const APP_VERSION = 'v0.1.3'
-const API_SERVER_LABEL = (() => {
-  try {
-    const url = new URL(API_BASE_URL)
-    return `${url.hostname}:${url.port || (url.protocol === 'https:' ? '443' : '80')}`
-  } catch {
-    return API_BASE_URL
-  }
-})()
+const APP_VERSION = 'v0.1.4'
 
 type DesktopStatus = {
   admin: boolean
@@ -247,7 +239,6 @@ onBeforeUnmount(stopLeaseHeartbeat)
       <div class="brand-mark"><Gamepad2 :size="28" /></div>
       <p class="eyebrow">WE8 ONLINE ARENA</p>
       <h1>WEL职业联盟对战平台 <span class="app-version">{{ APP_VERSION }}</span></h1>
-      <p class="server-label">服务器：{{ API_SERVER_LABEL }}</p>
       <form @submit.prevent="authenticate">
         <label>账号<input v-model.trim="form.username" autocomplete="username" placeholder="3 至 32 位账号" required /></label>
         <label>密码<input v-model="form.password" type="password" autocomplete="current-password" placeholder="至少 6 位" minlength="6" required /></label>
@@ -259,7 +250,7 @@ onBeforeUnmount(stopLeaseHeartbeat)
 
   <main v-else class="app-shell">
     <aside class="sidebar">
-      <div class="sidebar-brand"><span class="brand-mark"><Gamepad2 :size="22" /></span><span>WE8 Arena <span class="app-version">{{ APP_VERSION }}</span><small>服务器 {{ API_SERVER_LABEL }}</small></span></div>
+      <div class="sidebar-brand"><span class="brand-mark"><Gamepad2 :size="22" /></span><span>WE8 Arena <span class="app-version">{{ APP_VERSION }}</span></span></div>
       <div class="user-row"><span class="avatar">{{ user.nickname.slice(0, 1) }}</span><span><strong>{{ user.nickname }}</strong><small>@{{ user.username }}</small></span></div>
       <nav><a class="active"><Users :size="18" /> 对战房间</a></nav>
       <div class="sidebar-actions"><button class="logout" @click="logout"><LogOut :size="17" /> 退出登录</button></div>
@@ -277,7 +268,7 @@ onBeforeUnmount(stopLeaseHeartbeat)
           <button class="secondary-button" @click="refreshDesktopStatus" :disabled="loading">重新检测</button>
         </div>
       </section>
-      <header class="topbar"><div><p class="eyebrow">游戏大厅</p><h2>选择一个对战房间</h2></div><div class="topbar-actions"><div class="online"><span></span>{{ totalOnline }} 人在线</div><button v-if="desktop()" class="icon-button" title="选择 WE8 游戏程序" @click="chooseGame"><FolderOpen :size="18" /></button></div></header>
+      <header class="topbar"><div><p class="eyebrow">游戏大厅</p><h2>选择一个对战房间</h2></div><div class="topbar-actions"><div class="online"><span></span>{{ totalOnline }} 人在线</div></div></header>
       <section v-if="desktop()" class="game-path-panel"><div><p class="eyebrow">当前游戏路径</p><span :class="['game-path', { empty: !gamePath.trim() }]">{{ gamePathLabel }}</span></div><button class="secondary-button" @click="chooseGame"><FolderOpen :size="17" /> 选择游戏</button></section>
       <p v-if="errorMessage" class="banner error">{{ errorMessage }}</p><p v-if="notice" class="banner notice">{{ notice }}</p>
 
