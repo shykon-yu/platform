@@ -157,5 +157,6 @@ module.exports = {
   inspectVpnNetwork,
   isIPv4InCIDR,
   parseAdapterOutput,
+  runPowerShell,
   waitForVpnNetwork,
 }

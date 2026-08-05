@@ -28,6 +28,7 @@ const desktopStatus = ref<DesktopStatus | null>(null)
 const form = ref({ username: '', password: '' })
 const GAME_PATH_KEY = 'we8.game-path'
 const LEGACY_GAME_PATH_KEY = 'pes8.game-path'
+const FIREWALL_GAME_PATH_KEY = 'we8.firewall-game-path'
 const gamePath = ref(localStorage.getItem(GAME_PATH_KEY) ?? localStorage.getItem(LEGACY_GAME_PATH_KEY) ?? '')
 const totalOnline = computed(() => rooms.value.reduce((total, room) => total + room.members, 0))
 const activeRoom = computed(() => activeLease.value ? rooms.value.find(room => room.id === activeLease.value?.room_id) ?? null : null)
@@ -235,8 +236,22 @@ async function chooseGame() {
     if (!selectedPath) return
     gamePath.value = selectedPath
     saveGamePath()
+    await ensureGameFirewall(selectedPath)
   } catch (error) {
     errorMessage.value = messageOf(error)
+  }
+}
+async function ensureGameFirewall(path: string) {
+  if (!desktop()) return true
+  if (localStorage.getItem(FIREWALL_GAME_PATH_KEY) === path) return true
+  try {
+    await desktop()!.configureGameFirewall(path)
+    localStorage.setItem(FIREWALL_GAME_PATH_KEY, path)
+    notice.value = '游戏路径与联机防火墙已配置'
+    return true
+  } catch (error) {
+    errorMessage.value = messageOf(error)
+    return false
   }
 }
 async function launchGame() {
@@ -247,6 +262,7 @@ async function launchGame() {
   try {
     networkStatus.value = await desktop()!.inspectVpn({ username: activeLease.value.username, subnetCidr: activeLease.value.subnet_cidr })
     if (!networkStatus.value.connected) throw new Error('尚未获取房间虚拟 IP，请退出房间后重新进入')
+    if (!(await ensureGameFirewall(gamePath.value))) return
     await desktop()!.launchGame(gamePath.value)
   } catch (error) { errorMessage.value = messageOf(error) }
 }

@@ -3,6 +3,7 @@ const { spawn } = require('node:child_process')
 const fs = require('node:fs')
 const path = require('node:path')
 const { version: appVersion } = require('../package.json')
+const { configureGameFirewall } = require('./firewall.cjs')
 const { inspectVpnNetwork, waitForVpnNetwork } = require('./network.cjs')
 
 const DEFAULT_NIC = 'VPN'
@@ -303,7 +304,7 @@ ipcMain.handle('disconnect-vpn', async (_event, username) => {
   await runVpncmd(['localhost', '/CLIENT', '/CMD', 'AccountDelete', account]).catch(() => {})
 })
 
-ipcMain.handle('launch-game', async (_event, gamePath) => {
+function resolveGameExecutable(gamePath) {
   if (!gamePath || !gamePath.trim()) throw new Error('请先选择 WE8 游戏程序')
 
   const normalizedPath = path.normalize(gamePath.trim().replace(/^"(.*)"$/, '$1'))
@@ -312,9 +313,19 @@ ipcMain.handle('launch-game', async (_event, gamePath) => {
   }
 
   const stat = fs.statSync(normalizedPath)
-  if (!stat.isFile()) {
+  if (!stat.isFile() || path.extname(normalizedPath).toLowerCase() !== '.exe') {
     throw new Error('选择的 WE8 路径不是可执行文件')
   }
+  return normalizedPath
+}
+
+ipcMain.handle('configure-game-firewall', async (_event, gamePath) => {
+  const normalizedPath = resolveGameExecutable(gamePath)
+  await configureGameFirewall(normalizedPath)
+})
+
+ipcMain.handle('launch-game', async (_event, gamePath) => {
+  const normalizedPath = resolveGameExecutable(gamePath)
 
   if (process.platform === 'win32') {
     // Shell launch avoids EACCES from direct spawn on some Windows 11

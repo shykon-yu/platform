@@ -40,6 +40,7 @@ declare global {
       restoreVpn: (lease: Pick<DesktopLease, 'username' | 'subnetCidr'>) => Promise<DesktopLeaseStatus>
       inspectVpn: (lease: Pick<DesktopLease, 'username' | 'subnetCidr'>) => Promise<DesktopLeaseStatus>
       copyVpnDiagnostics: (lease: Pick<DesktopLease, 'username' | 'subnetCidr'> & { hub: string }) => Promise<DesktopLeaseStatus>
+      configureGameFirewall: (gamePath: string) => Promise<void>
       desktopStatus: () => Promise<DesktopStatus>
       prepareDesktop: () => Promise<DesktopStatus>
       disconnectVpn: (username: string) => Promise<void>
