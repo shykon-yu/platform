@@ -5,6 +5,20 @@ export type DesktopLease = {
   username: string
   password: string
   nicName?: string
+  subnetCidr: string
+}
+
+export type DesktopLeaseStatus = {
+  connected: boolean
+  actualIp: string | null
+  subnetCidr: string
+  adapterName: string | null
+  adapterDescription: string | null
+  defaultGateways: string[]
+  dnsServers: string[]
+  conflictingAdapters: string[]
+  warnings: string[]
+  nicName?: string
 }
 
 export type DesktopStatus = {
@@ -22,7 +36,10 @@ export type DesktopStatus = {
 declare global {
   interface Window {
     we8Desktop?: {
-      connectVpn: (lease: DesktopLease) => Promise<void>
+      connectVpn: (lease: DesktopLease) => Promise<DesktopLeaseStatus>
+      restoreVpn: (lease: Pick<DesktopLease, 'username' | 'subnetCidr'>) => Promise<DesktopLeaseStatus>
+      inspectVpn: (lease: Pick<DesktopLease, 'username' | 'subnetCidr'>) => Promise<DesktopLeaseStatus>
+      copyVpnDiagnostics: (lease: Pick<DesktopLease, 'username' | 'subnetCidr'> & { hub: string }) => Promise<DesktopLeaseStatus>
       desktopStatus: () => Promise<DesktopStatus>
       prepareDesktop: () => Promise<DesktopStatus>
       disconnectVpn: (username: string) => Promise<void>

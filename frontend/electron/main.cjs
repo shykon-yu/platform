@@ -1,8 +1,9 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain } = require('electron')
+const { app, BrowserWindow, Menu, clipboard, dialog, ipcMain } = require('electron')
 const { spawn } = require('node:child_process')
 const fs = require('node:fs')
 const path = require('node:path')
 const { version: appVersion } = require('../package.json')
+const { inspectVpnNetwork, waitForVpnNetwork } = require('./network.cjs')
 
 const DEFAULT_NIC = 'VPN'
 const DEFAULT_VPN_HOST = '8.133.189.9'
@@ -243,6 +244,52 @@ ipcMain.handle('connect-vpn', async (_event, lease) => {
   await runVpncmd(['localhost', '/CLIENT', '/CMD', 'AccountCreate', account, `/SERVER:${server}`, `/HUB:${lease.hub}`, `/USERNAME:${lease.username}`, `/NICNAME:${nic}`])
   await runVpncmd(['localhost', '/CLIENT', '/CMD', 'AccountPasswordSet', account, `/PASSWORD:${lease.password}`, '/TYPE:standard'])
   await runVpncmd(['localhost', '/CLIENT', '/CMD', 'AccountConnect', account])
+  const network = await waitForVpnNetwork(lease.subnetCidr)
+  if (!network.connected) {
+    throw new Error(`已连接房间，但 30 秒内没有获取到 ${lease.subnetCidr} 网段的虚拟 IP`)
+  }
+  return { ...network, nicName: nic }
+})
+
+ipcMain.handle('restore-vpn', async (_event, lease) => {
+  validateIdentifier(lease.username, 'VPN 用户名')
+  await prepareDesktop()
+  let network = await inspectVpnNetwork(lease.subnetCidr)
+  if (network.connected) return network
+
+  const account = `WEL-${lease.username}`
+  try {
+    await runVpncmd(['localhost', '/CLIENT', '/CMD', 'AccountConnect', account])
+  } catch {
+    return network
+  }
+  network = await waitForVpnNetwork(lease.subnetCidr, 15000)
+  return network
+})
+
+ipcMain.handle('inspect-vpn', async (_event, lease) => {
+  validateIdentifier(lease.username, 'VPN 用户名')
+  return inspectVpnNetwork(lease.subnetCidr)
+})
+
+ipcMain.handle('copy-vpn-diagnostics', async (_event, lease) => {
+  validateIdentifier(lease.username, 'VPN 用户名')
+  const [status, network] = await Promise.all([desktopStatus(), inspectVpnNetwork(lease.subnetCidr)])
+  const lines = [
+    `WEL客户端版本: ${appVersion}`,
+    `Windows版本: ${status.systemVersion || '未知'}`,
+    `SoftEther服务: ${status.serviceRunning ? '运行中' : '未运行'}`,
+    `房间: ${lease.hub}`,
+    `房间网段: ${lease.subnetCidr}`,
+    `实际虚拟IP: ${network.actualIp || '未获取'}`,
+    `虚拟网卡: ${network.adapterDescription || network.adapterName || '未识别'}`,
+    `VPN默认网关: ${network.defaultGateways.join(', ') || '无'}`,
+    `VPN DNS: ${network.dnsServers.join(', ') || '无'}`,
+    `冲突虚拟网卡: ${network.conflictingAdapters.join('、') || '未检测到'}`,
+    `诊断提示: ${network.warnings.join('；') || '无'}`,
+  ]
+  clipboard.writeText(lines.join('\r\n'))
+  return network
 })
 
 ipcMain.handle('desktop-status', () => desktopStatus())

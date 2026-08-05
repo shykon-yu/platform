@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { FolderOpen, Gamepad2, LogOut, Play, RefreshCw, Router, ShieldCheck, Users } from 'lucide-vue-next'
+import { ClipboardCopy, FolderOpen, Gamepad2, LogOut, Play, RefreshCw, Router, ShieldCheck, Users } from 'lucide-vue-next'
 import { ApiError, authApi, clearToken, roomApi, setToken, type Lease, type Room, type User } from './api'
+import type { DesktopLeaseStatus } from './electron'
+import packageInfo from '../package.json'
 
-const APP_VERSION = 'v0.1.4'
+const APP_VERSION = `v${packageInfo.version}`
 
 type DesktopStatus = {
   admin: boolean
@@ -18,6 +20,7 @@ type DesktopStatus = {
 const user = ref<User | null>(null)
 const rooms = ref<Room[]>([])
 const activeLease = ref<Lease | null>(null)
+const networkStatus = ref<DesktopLeaseStatus | null>(null)
 const loading = ref(false)
 const errorMessage = ref('')
 const notice = ref('')
@@ -29,8 +32,15 @@ const gamePath = ref(localStorage.getItem(GAME_PATH_KEY) ?? localStorage.getItem
 const totalOnline = computed(() => rooms.value.reduce((total, room) => total + room.members, 0))
 const activeRoom = computed(() => activeLease.value ? rooms.value.find(room => room.id === activeLease.value?.room_id) ?? null : null)
 const roomInfoTitle = computed(() => activeLease.value ? activeRoom.value?.name ?? activeLease.value.hub_name : '未进入房间')
-const roomInfoSubtitle = computed(() => activeLease.value ? activeLease.value.hub_name : '请选择一个可用房间进入')
-const virtualIpLabel = computed(() => activeLease.value ? `${activeLease.value.virtual_ip} / ${activeLease.value.subnet_cidr}` : '待分配')
+const roomInfoSubtitle = computed(() => {
+  if (!activeLease.value) return '请选择一个可用房间进入'
+  return networkStatus.value?.connected ? `${activeLease.value.hub_name} · 网络已连接` : `${activeLease.value.hub_name} · 正在确认网络`
+})
+const virtualIpLabel = computed(() => {
+  if (!activeLease.value) return '待分配'
+  return networkStatus.value?.actualIp ? `${networkStatus.value.actualIp} / ${activeLease.value.subnet_cidr}` : '尚未获取'
+})
+const networkWarning = computed(() => networkStatus.value?.warnings.join('；') ?? '')
 const connectionTitle = computed(() => {
   if (desktopStatus.value?.ready) return '安装包已准备完成'
   if (desktopStatus.value?.isWindows7) return '需要安装 SoftEther 组件'
@@ -86,6 +96,7 @@ async function renewLease() {
       stopLeaseHeartbeat()
       try { await desktop()?.disconnectVpn(lease.username) } catch { /* local connection may already be gone */ }
       activeLease.value = null
+      networkStatus.value = null
       await loadRooms()
       errorMessage.value = error.message
       return
@@ -118,9 +129,42 @@ async function restoreSession() {
   try {
     user.value = (await authApi.me()).user
     activeLease.value = (await authApi.roomSession()).lease
-    startLeaseHeartbeat()
-    await loadRooms()
-  } catch { clearToken() }
+  } catch {
+    clearToken()
+    return
+  }
+
+  await loadRooms()
+
+  if (activeLease.value && desktop()) {
+    try {
+      networkStatus.value = await desktop()!.restoreVpn({
+        username: activeLease.value.username,
+        subnetCidr: activeLease.value.subnet_cidr,
+      })
+      if (!networkStatus.value.connected) {
+        const refreshed = (await roomApi.join(activeLease.value.room_id)).lease
+        activeLease.value = refreshed
+        networkStatus.value = await connectDesktopVpn(refreshed)
+      }
+    } catch (error) {
+      networkStatus.value = null
+      errorMessage.value = `房间网络恢复失败：${messageOf(error)}`
+    }
+  }
+  startLeaseHeartbeat()
+}
+
+function connectDesktopVpn(lease: Lease) {
+  return desktop()!.connectVpn({
+    host: lease.server_host,
+    port: lease.server_port,
+    hub: lease.hub_name,
+    username: lease.username,
+    password: lease.password ?? '',
+    nicName: 'VPN',
+    subnetCidr: lease.subnet_cidr,
+  })
 }
 
 async function joinRoom(room: Room) {
@@ -132,14 +176,7 @@ async function joinRoom(room: Room) {
     lease = (await roomApi.join(room.id)).lease
     activeLease.value = lease
     if (desktop()) {
-      await desktop()!.connectVpn({
-        host: lease.server_host,
-        port: lease.server_port,
-        hub: lease.hub_name,
-        username: lease.username,
-        password: lease.password ?? '',
-        nicName: 'VPN',
-      })
+      networkStatus.value = await connectDesktopVpn(lease)
     }
     startLeaseHeartbeat()
     notice.value = '已进入房间'
@@ -151,6 +188,7 @@ async function joinRoom(room: Room) {
     }
     if (lease) try { await roomApi.leave(room.id) } catch { /* the lease reaper will clean it up */ }
     activeLease.value = null
+    networkStatus.value = null
     errorMessage.value = messageOf(error)
   } finally { loading.value = false }
 }
@@ -167,6 +205,7 @@ async function releaseActiveLease() {
     if (!(error instanceof ApiError && error.status === 404)) cleanupError ??= error
   }
   activeLease.value = null
+  networkStatus.value = null
   if (cleanupError) throw cleanupError
 }
 
@@ -205,7 +244,24 @@ async function launchGame() {
   if (!activeLease.value) { errorMessage.value = '请先进入一个房间并连接虚拟网络'; return }
   if (!gamePath.value.trim()) { errorMessage.value = '请先选择 WE8 游戏程序路径'; return }
   if (!desktop()) { notice.value = '浏览器预览不会启动本机程序，请在 Windows 客户端测试'; return }
-  try { await desktop()!.launchGame(gamePath.value) } catch (error) { errorMessage.value = messageOf(error) }
+  try {
+    networkStatus.value = await desktop()!.inspectVpn({ username: activeLease.value.username, subnetCidr: activeLease.value.subnet_cidr })
+    if (!networkStatus.value.connected) throw new Error('尚未获取房间虚拟 IP，请退出房间后重新进入')
+    await desktop()!.launchGame(gamePath.value)
+  } catch (error) { errorMessage.value = messageOf(error) }
+}
+async function copyDiagnostics() {
+  if (!activeLease.value || !desktop()) return
+  try {
+    networkStatus.value = await desktop()!.copyVpnDiagnostics({
+      username: activeLease.value.username,
+      subnetCidr: activeLease.value.subnet_cidr,
+      hub: activeLease.value.hub_name,
+    })
+    notice.value = '联机诊断信息已复制'
+  } catch (error) {
+    errorMessage.value = messageOf(error)
+  }
 }
 async function logout() {
   loading.value = true
@@ -217,6 +273,7 @@ async function logout() {
   } finally {
     stopLeaseHeartbeat()
     user.value = null
+    networkStatus.value = null
     clearToken()
     rooms.value = []
     loading.value = false
@@ -270,11 +327,11 @@ onBeforeUnmount(stopLeaseHeartbeat)
       </section>
       <header class="topbar"><div><p class="eyebrow">游戏大厅</p><h2>选择一个对战房间</h2></div><div class="topbar-actions"><div class="online"><span></span>{{ totalOnline }} 人在线</div></div></header>
       <section v-if="desktop()" class="game-path-panel"><div><p class="eyebrow">当前游戏路径</p><span :class="['game-path', { empty: !gamePath.trim() }]">{{ gamePathLabel }}</span></div><button class="secondary-button" @click="chooseGame"><FolderOpen :size="17" /> 选择游戏</button></section>
-      <p v-if="errorMessage" class="banner error">{{ errorMessage }}</p><p v-if="notice" class="banner notice">{{ notice }}</p>
+      <p v-if="errorMessage" class="banner error">{{ errorMessage }}</p><p v-if="networkWarning" class="banner warning">{{ networkWarning }}</p><p v-if="notice" class="banner notice">{{ notice }}</p>
 
       <section class="connection-strip room-status-strip" :class="{ connected: activeLease }">
         <div><p class="eyebrow">房间信息</p><h3>{{ roomInfoTitle }}</h3><span><Router :size="15" /> {{ roomInfoSubtitle }}</span></div>
-        <div class="connection-actions"><span class="secure"><ShieldCheck :size="17" /> 虚拟 IP：{{ virtualIpLabel }}</span><button class="primary-button launch" @click="launchGame" :disabled="!activeLease"><Play :size="17" /> 启动 WE8</button><button v-if="activeLease" class="secondary-button" @click="leaveRoom" :disabled="loading">退出房间</button></div>
+        <div class="connection-actions"><span class="secure"><ShieldCheck :size="17" /> 虚拟 IP：{{ virtualIpLabel }}</span><button v-if="activeLease" class="secondary-button" title="复制联机诊断" @click="copyDiagnostics"><ClipboardCopy :size="17" /> 复制诊断</button><button class="primary-button launch" @click="launchGame" :disabled="!activeLease || !networkStatus?.connected"><Play :size="17" /> 启动 WE8</button><button v-if="activeLease" class="secondary-button" @click="leaveRoom" :disabled="loading">退出房间</button></div>
       </section>
 
       <section class="room-section"><div class="section-heading"><h3>可用房间</h3><button class="icon-button" title="刷新房间" @click="loadRooms" :disabled="loading"><RefreshCw :size="18" :class="{ spinning: loading }" /></button></div>

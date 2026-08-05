@@ -2,6 +2,9 @@ const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('we8Desktop', {
   connectVpn: (lease) => ipcRenderer.invoke('connect-vpn', lease),
+  restoreVpn: (lease) => ipcRenderer.invoke('restore-vpn', lease),
+  inspectVpn: (lease) => ipcRenderer.invoke('inspect-vpn', lease),
+  copyVpnDiagnostics: (lease) => ipcRenderer.invoke('copy-vpn-diagnostics', lease),
   desktopStatus: () => ipcRenderer.invoke('desktop-status'),
   prepareDesktop: () => ipcRenderer.invoke('prepare-desktop'),
   disconnectVpn: (username) => ipcRenderer.invoke('disconnect-vpn', username),

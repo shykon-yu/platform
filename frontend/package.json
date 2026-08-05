@@ -1,13 +1,14 @@
 {
   "name": "we8-platform-client",
   "private": true,
-  "version": "0.1.4",
+  "version": "0.1.5",
   "packageManager": "pnpm@11.11.0",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vue-tsc --noEmit && vite build",
+    "test:electron": "node --test electron/*.test.cjs",
     "electron:dev": "npm run build && electron electron/main.cjs",
     "electron:build": "npm run build && node scripts/download-softether.cjs && node scripts/extract-softether-runtime.cjs && electron-builder --win nsis",
     "electron": "electron"
@@ -32,7 +33,7 @@
       "perMachine": true,
       "allowElevation": true,
       "allowToChangeInstallationDirectory": true,
-      "shortcutName": "WEL职业联盟对战平台 v0.1.4",
+      "shortcutName": "WEL职业联盟对战平台 v0.1.5",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
     }
