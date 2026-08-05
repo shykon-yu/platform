@@ -4,7 +4,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 const { version: appVersion } = require('../package.json')
 const { configureGameFirewall } = require('./firewall.cjs')
-const { inspectVpnNetwork, waitForVpnNetwork } = require('./network.cjs')
+const { inspectVpnNetwork, prioritizeVpnNetwork, waitForVpnNetwork } = require('./network.cjs')
 
 const DEFAULT_NIC = 'VPN'
 const DEFAULT_VPN_HOST = '8.133.189.9'
@@ -245,10 +245,11 @@ ipcMain.handle('connect-vpn', async (_event, lease) => {
   await runVpncmd(['localhost', '/CLIENT', '/CMD', 'AccountCreate', account, `/SERVER:${server}`, `/HUB:${lease.hub}`, `/USERNAME:${lease.username}`, `/NICNAME:${nic}`])
   await runVpncmd(['localhost', '/CLIENT', '/CMD', 'AccountPasswordSet', account, `/PASSWORD:${lease.password}`, '/TYPE:standard'])
   await runVpncmd(['localhost', '/CLIENT', '/CMD', 'AccountConnect', account])
-  const network = await waitForVpnNetwork(lease.subnetCidr)
+  let network = await waitForVpnNetwork(lease.subnetCidr)
   if (!network.connected) {
     throw new Error(`已连接房间，但 30 秒内没有获取到 ${lease.subnetCidr} 网段的虚拟 IP`)
   }
+  network = await prioritizeVpnNetwork(lease.subnetCidr)
   return { ...network, nicName: nic }
 })
 
@@ -256,7 +257,7 @@ ipcMain.handle('restore-vpn', async (_event, lease) => {
   validateIdentifier(lease.username, 'VPN 用户名')
   await prepareDesktop()
   let network = await inspectVpnNetwork(lease.subnetCidr)
-  if (network.connected) return network
+  if (network.connected) return prioritizeVpnNetwork(lease.subnetCidr)
 
   const account = `WEL-${lease.username}`
   try {
@@ -265,12 +266,17 @@ ipcMain.handle('restore-vpn', async (_event, lease) => {
     return network
   }
   network = await waitForVpnNetwork(lease.subnetCidr, 15000)
-  return network
+  return network.connected ? prioritizeVpnNetwork(lease.subnetCidr) : network
 })
 
 ipcMain.handle('inspect-vpn', async (_event, lease) => {
   validateIdentifier(lease.username, 'VPN 用户名')
   return inspectVpnNetwork(lease.subnetCidr)
+})
+
+ipcMain.handle('prioritize-vpn', async (_event, lease) => {
+  validateIdentifier(lease.username, 'VPN 用户名')
+  return prioritizeVpnNetwork(lease.subnetCidr)
 })
 
 ipcMain.handle('copy-vpn-diagnostics', async (_event, lease) => {
@@ -284,6 +290,8 @@ ipcMain.handle('copy-vpn-diagnostics', async (_event, lease) => {
     `房间网段: ${lease.subnetCidr}`,
     `实际虚拟IP: ${network.actualIp || '未获取'}`,
     `虚拟网卡: ${network.adapterDescription || network.adapterName || '未识别'}`,
+    `VPN接口编号: ${network.interfaceIndex ?? '未知'}`,
+    `VPN接口跃点: ${network.interfaceMetric ?? '未知'}`,
     `VPN默认网关: ${network.defaultGateways.join(', ') || '无'}`,
     `VPN DNS: ${network.dnsServers.join(', ') || '无'}`,
     `冲突虚拟网卡: ${network.conflictingAdapters.join('、') || '未检测到'}`,

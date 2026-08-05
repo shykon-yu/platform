@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('we8Desktop', {
   connectVpn: (lease) => ipcRenderer.invoke('connect-vpn', lease),
   restoreVpn: (lease) => ipcRenderer.invoke('restore-vpn', lease),
   inspectVpn: (lease) => ipcRenderer.invoke('inspect-vpn', lease),
+  prioritizeVpn: (lease) => ipcRenderer.invoke('prioritize-vpn', lease),
   copyVpnDiagnostics: (lease) => ipcRenderer.invoke('copy-vpn-diagnostics', lease),
   configureGameFirewall: (gamePath) => ipcRenderer.invoke('configure-game-firewall', gamePath),
   desktopStatus: () => ipcRenderer.invoke('desktop-status'),

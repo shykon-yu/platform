@@ -1,6 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { analyzeNetwork, findRoomAddress, isIPv4InCIDR, parseAdapterOutput } = require('./network.cjs')
+const { analyzeNetwork, buildVpnPriorityScript, findRoomAddress, isIPv4InCIDR, parseAdapterOutput } = require('./network.cjs')
 
 test('matches only addresses in the room subnet', () => {
   assert.equal(isIPv4InCIDR('10.80.3.10', '10.80.3.0/24'), true)
@@ -20,11 +20,13 @@ test('reports stale gateway and enabled conflicting adapters', () => {
   const status = analyzeNetwork('10.80.3.0/24', { name: 'VPN', address: '10.80.3.11' }, [
     {
       description: 'SoftEther VPN Client Adapter - VPN', ipEnabled: true,
+      interfaceIndex: 18, interfaceMetric: 25,
       ipAddresses: ['10.80.3.11'], subnets: ['255.255.255.0'],
       defaultGateways: ['10.80.3.1'], dnsServers: ['10.80.3.1'],
     },
     {
       description: 'TAP-Windows Adapter V9', ipEnabled: true,
+      interfaceIndex: 19, interfaceMetric: 1,
       ipAddresses: ['10.0.0.2'], subnets: ['255.255.255.0'],
       defaultGateways: [], dnsServers: [],
     },
@@ -32,15 +34,27 @@ test('reports stale gateway and enabled conflicting adapters', () => {
 
   assert.equal(status.connected, true)
   assert.equal(status.actualIp, '10.80.3.11')
+  assert.equal(status.interfaceIndex, 18)
+  assert.equal(status.interfaceMetric, 25)
   assert.deepEqual(status.conflictingAdapters, ['TAP-Windows Adapter V9'])
-  assert.equal(status.warnings.length, 3)
+  assert.equal(status.warnings.length, 4)
 })
 
 test('parses base64 encoded PowerShell adapter fields', () => {
   const encode = (value) => Buffer.from(value, 'utf8').toString('base64')
-  const output = `${encode('SoftEther VPN Client Adapter - VPN')}|True|${encode('10.80.1.10')}|${encode('255.255.255.0')}||\n`
+  const output = `${encode('SoftEther VPN Client Adapter - VPN')}|True|18|25|${encode('10.80.1.10')}|${encode('255.255.255.0')}||\n`
   const adapters = parseAdapterOutput(output)
   assert.equal(adapters.length, 1)
   assert.equal(adapters[0].description, 'SoftEther VPN Client Adapter - VPN')
+  assert.equal(adapters[0].interfaceIndex, 18)
+  assert.equal(adapters[0].interfaceMetric, 25)
   assert.deepEqual(adapters[0].defaultGateways, [])
+})
+
+test('builds a Win7-compatible netsh command for the room adapter', () => {
+  const script = buildVpnPriorityScript(18)
+  assert.match(script, /interface=18/)
+  assert.match(script, /metric=1/)
+  assert.match(script, /store=persistent/)
+  assert.throws(() => buildVpnPriorityScript('invalid'), /接口编号无效/)
 })

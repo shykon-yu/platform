@@ -14,6 +14,8 @@ export type DesktopLeaseStatus = {
   subnetCidr: string
   adapterName: string | null
   adapterDescription: string | null
+  interfaceIndex: number | null
+  interfaceMetric: number | null
   defaultGateways: string[]
   dnsServers: string[]
   conflictingAdapters: string[]
@@ -39,6 +41,7 @@ declare global {
       connectVpn: (lease: DesktopLease) => Promise<DesktopLeaseStatus>
       restoreVpn: (lease: Pick<DesktopLease, 'username' | 'subnetCidr'>) => Promise<DesktopLeaseStatus>
       inspectVpn: (lease: Pick<DesktopLease, 'username' | 'subnetCidr'>) => Promise<DesktopLeaseStatus>
+      prioritizeVpn: (lease: Pick<DesktopLease, 'username' | 'subnetCidr'>) => Promise<DesktopLeaseStatus>
       copyVpnDiagnostics: (lease: Pick<DesktopLease, 'username' | 'subnetCidr'> & { hub: string }) => Promise<DesktopLeaseStatus>
       configureGameFirewall: (gamePath: string) => Promise<void>
       desktopStatus: () => Promise<DesktopStatus>

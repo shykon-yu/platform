@@ -43,14 +43,16 @@ function decodeField(value) {
 function parseAdapterOutput(output) {
   return String(output || '').split(/\r?\n/).map((line) => {
     const fields = line.trim().split('|')
-    if (fields.length !== 6) return null
+    if (fields.length !== 8) return null
     return {
       description: decodeField(fields[0]),
       ipEnabled: fields[1].toLowerCase() === 'true',
-      ipAddresses: decodeField(fields[2]).split(',').filter(Boolean),
-      subnets: decodeField(fields[3]).split(',').filter(Boolean),
-      defaultGateways: decodeField(fields[4]).split(',').filter(Boolean),
-      dnsServers: decodeField(fields[5]).split(',').filter(Boolean),
+      interfaceIndex: /^\d+$/.test(fields[2]) ? Number(fields[2]) : null,
+      interfaceMetric: /^\d+$/.test(fields[3]) ? Number(fields[3]) : null,
+      ipAddresses: decodeField(fields[4]).split(',').filter(Boolean),
+      subnets: decodeField(fields[5]).split(',').filter(Boolean),
+      defaultGateways: decodeField(fields[6]).split(',').filter(Boolean),
+      dnsServers: decodeField(fields[7]).split(',').filter(Boolean),
     }
   }).filter(Boolean)
 }
@@ -89,9 +91,16 @@ function Encode-Value($value) {
   return [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$value))
 }
 Get-WmiObject Win32_NetworkAdapterConfiguration | ForEach-Object {
+  $metric = $_.IPConnectionMetric
+  try {
+    $interface = Get-ItemProperty ("HKLM:\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\" + $_.SettingID) -ErrorAction Stop
+    if ($null -ne $interface.InterfaceMetric) { $metric = $interface.InterfaceMetric }
+  } catch {}
   $fields = @(
     (Encode-Value $_.Description),
     ([string]$_.IPEnabled),
+    ([string]$_.InterfaceIndex),
+    ([string]$metric),
     (Encode-Value ($_.IPAddress -join ',')),
     (Encode-Value ($_.IPSubnet -join ',')),
     (Encode-Value ($_.DefaultIPGateway -join ',')),
@@ -115,6 +124,9 @@ function analyzeNetwork(cidr, roomAddress, adapters) {
   if (!actualIp) warnings.push(`尚未获取房间网段 ${cidr} 的虚拟 IP`)
   if (roomAdapter?.defaultGateways.length) warnings.push(`VPN 网卡仍存在默认网关：${roomAdapter.defaultGateways.join(', ')}`)
   if (roomAdapter?.dnsServers.length) warnings.push(`VPN 网卡仍存在 DNS：${roomAdapter.dnsServers.join(', ')}`)
+  if (roomAdapter && roomAdapter.interfaceMetric !== null && roomAdapter.interfaceMetric > 5) {
+    warnings.push(`VPN 网卡跃点较高：${roomAdapter.interfaceMetric}`)
+  }
   if (conflictingAdapters.length) warnings.push(`检测到其他已启用虚拟网卡：${conflictingAdapters.join('、')}`)
 
   return {
@@ -123,6 +135,8 @@ function analyzeNetwork(cidr, roomAddress, adapters) {
     subnetCidr: cidr,
     adapterName: roomAddress?.name || null,
     adapterDescription: roomAdapter?.description || roomAddress?.name || null,
+    interfaceIndex: roomAdapter?.interfaceIndex ?? null,
+    interfaceMetric: roomAdapter?.interfaceMetric ?? null,
     defaultGateways: roomAdapter?.defaultGateways || [],
     dnsServers: roomAdapter?.dnsServers || [],
     conflictingAdapters,
@@ -141,6 +155,43 @@ async function inspectVpnNetwork(cidr) {
   return analyzeNetwork(cidr, roomAddress, adapters)
 }
 
+function buildVpnPriorityScript(interfaceIndex) {
+  const index = Number(interfaceIndex)
+  if (!Number.isInteger(index) || index <= 0) throw new Error('VPN 网卡接口编号无效')
+  return `
+$netsh = Join-Path $env:SystemRoot 'System32\\netsh.exe'
+& $netsh interface ipv4 set interface "interface=${index}" "metric=1" "store=persistent" | Out-Null
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+`
+}
+
+async function runElevatedPowerShell(script, timeoutMs = 120000) {
+  const innerCommand = Buffer.from(script, 'utf16le').toString('base64')
+  const elevatedCommand = `
+$arguments = @('-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', '${innerCommand}')
+$process = Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -Verb RunAs -WindowStyle Hidden -Wait -PassThru
+if ($null -eq $process) { exit 1 }
+exit $process.ExitCode
+`
+  return runPowerShell(elevatedCommand, timeoutMs)
+}
+
+async function prioritizeVpnNetwork(cidr) {
+  const network = await inspectVpnNetwork(cidr)
+  if (!network.connected || network.interfaceIndex === null || network.interfaceMetric === 1) return network
+
+  try {
+    await runElevatedPowerShell(buildVpnPriorityScript(network.interfaceIndex))
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    return inspectVpnNetwork(cidr)
+  } catch {
+    return {
+      ...network,
+      warnings: [...network.warnings, '无法自动调整 VPN 网卡优先级，请同意管理员授权后重试'],
+    }
+  }
+}
+
 async function waitForVpnNetwork(cidr, timeoutMs = 30000) {
   const startedAt = Date.now()
   while (Date.now() - startedAt < timeoutMs) {
@@ -153,10 +204,12 @@ async function waitForVpnNetwork(cidr, timeoutMs = 30000) {
 
 module.exports = {
   analyzeNetwork,
+  buildVpnPriorityScript,
   findRoomAddress,
   inspectVpnNetwork,
   isIPv4InCIDR,
   parseAdapterOutput,
+  prioritizeVpnNetwork,
   runPowerShell,
   waitForVpnNetwork,
 }

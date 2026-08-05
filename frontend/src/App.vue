@@ -314,7 +314,7 @@ async function launchGame() {
   if (!gamePath.value.trim()) { errorMessage.value = '请先选择 WE8 游戏程序路径'; return }
   if (!desktop()) { notice.value = '浏览器预览不会启动本机程序，请在 Windows 客户端测试'; return }
   try {
-    networkStatus.value = await desktop()!.inspectVpn({ username: activeLease.value.username, subnetCidr: activeLease.value.subnet_cidr })
+    networkStatus.value = await desktop()!.prioritizeVpn({ username: activeLease.value.username, subnetCidr: activeLease.value.subnet_cidr })
     if (!networkStatus.value.connected) throw new Error('尚未获取房间虚拟 IP，请退出房间后重新进入')
     if (!(await ensureGameFirewall(gamePath.value))) return
     await desktop()!.launchGame(gamePath.value)
