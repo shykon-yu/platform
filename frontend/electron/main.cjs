@@ -210,17 +210,44 @@ foreach ($process in $processes) {
   [Console]::Out.WriteLine(('进程: {0} PID={1}' -f $process.ProcessName, $process.Id))
 }
 $pids = @($processes | ForEach-Object { $_.Id })
-$netstat = & "$env:SystemRoot\\System32\\netstat.exe" -ano -p udp
-$matched = $false
-foreach ($line in $netstat) {
-  foreach ($pid in $pids) {
-    if ($line -match ('\\s' + [Regex]::Escape([string]$pid) + '$')) {
-      $matched = $true
-      [Console]::Out.WriteLine(('UDP: ' + $line.Trim()))
+$udpMatched = $false
+
+try {
+  $udpEndpoints = Get-NetUDPEndpoint -ErrorAction Stop | Where-Object { $pids -contains $_.OwningProcess }
+  foreach ($endpoint in $udpEndpoints) {
+    $udpMatched = $true
+    [Console]::Out.WriteLine(('UDP: {0}:{1} PID={2}' -f $endpoint.LocalAddress, $endpoint.LocalPort, $endpoint.OwningProcess))
+  }
+} catch {}
+
+if (-not $udpMatched) {
+  $netstat = & "$env:SystemRoot\\System32\\netstat.exe" -ano -p udp
+  foreach ($line in $netstat) {
+    foreach ($pid in $pids) {
+      if ($line -match ('\\s' + [Regex]::Escape([string]$pid) + '$')) {
+        $udpMatched = $true
+        [Console]::Out.WriteLine(('UDP: ' + $line.Trim()))
+      }
     }
   }
 }
-if (-not $matched) { [Console]::Out.WriteLine('UDP: 未检测到 WE8/DirectPlay UDP 监听') }
+
+try {
+  $tcpConnections = Get-NetTCPConnection -ErrorAction Stop | Where-Object { $pids -contains $_.OwningProcess }
+  foreach ($connection in $tcpConnections) {
+    [Console]::Out.WriteLine(('TCP: {0} {1}:{2} -> {3}:{4} PID={5}' -f $connection.State, $connection.LocalAddress, $connection.LocalPort, $connection.RemoteAddress, $connection.RemotePort, $connection.OwningProcess))
+  }
+} catch {
+  $netstat = & "$env:SystemRoot\\System32\\netstat.exe" -ano -p tcp
+  foreach ($line in $netstat) {
+    foreach ($pid in $pids) {
+      if ($line -match ('\\s' + [Regex]::Escape([string]$pid) + '$')) {
+        [Console]::Out.WriteLine(('TCP: ' + $line.Trim()))
+      }
+    }
+  }
+}
+if (-not $udpMatched) { [Console]::Out.WriteLine('UDP: 未检测到 WE8/DirectPlay UDP 监听') }
 `
   try {
     return (await runPowerShell(script, 8000)).trim()

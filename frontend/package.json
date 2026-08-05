@@ -1,7 +1,7 @@
 {
   "name": "we8-platform-client",
   "private": true,
-  "version": "0.1.11",
+  "version": "0.1.12",
   "packageManager": "pnpm@11.11.0",
   "type": "module",
   "main": "electron/main.cjs",
@@ -33,7 +33,7 @@
       "perMachine": true,
       "allowElevation": true,
       "allowToChangeInstallationDirectory": true,
-      "shortcutName": "WEL职业联盟对战平台 v0.1.11",
+      "shortcutName": "WEL职业联盟对战平台 v0.1.12",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
     }
