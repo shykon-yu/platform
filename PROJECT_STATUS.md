@@ -51,16 +51,17 @@ Go 不保存用户密码，也不使用 Laravel JWT 访问平台接口。
 ```text
 Windows 客户端
   -> POST Go /api/v1/auth/login
-  -> POST Laravel /api/v1/auth/login
-  -> Laravel 查询 Soccer users 表并校验密码、状态
+  -> POST Laravel /api/v1/auth/platform-login
+  -> Laravel 校验密码、账号状态和平台使用期限（不签发 Laravel JWT）
   -> Go 按 soccer_user_id 同步 platform_users 映射
-  -> Go 签发 issuer=pes8-platform 的 24 小时 JWT
+  -> Go 签发 issuer=pes8-platform 的 JWT（最长 24 小时且不超过平台授权期限）
   -> Windows 后续仅携带 Go JWT 调用平台接口
 ```
 
 数据原则：
 
 - `soccer.users` 是账号唯一真源。
+- `soccer.users.platform_access_expires_at` 是对战平台权限到期时间，不影响 Soccer 前后台登录。
 - `platform.platform_users` 只保存 `soccer_user_id`、用户名/昵称快照和平台状态。
 - 两个服务各自维护数据库，不跨库建立外键。
 - Soccer 用户修改用户名或昵称后，下次平台登录会更新快照。
@@ -156,10 +157,10 @@ platform-web       Platform Vue/Electron Web 前端
 关键环境变量：
 
 ```env
-SOCCER_AUTH_URL=http://soccer-nginx/api/v1/auth/login
+SOCCER_AUTH_URL=http://soccer-nginx/api/v1/auth/platform-login
 JWT_SECRET=replace-with-a-long-random-secret
 SOFTETHER_MODE=vpncmd
-SOFTETHER_CLIENT_HOST=www.jingzhu.top
+SOFTETHER_CLIENT_HOST=8.133.189.9
 SOFTETHER_CLIENT_PORT=992
 SOFTETHER_ADMIN_ENDPOINT=host.docker.internal:5555
 SOFTETHER_ADMIN_PASSWORD=replace-with-server-admin-password

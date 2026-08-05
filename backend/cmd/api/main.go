@@ -53,26 +53,30 @@ type claims struct {
 }
 
 type user struct {
-	ID           int64  `json:"id"`
-	SoccerUserID int64  `json:"-"`
-	Username     string `json:"username"`
-	Nickname     string `json:"nickname"`
+	ID                      int64     `json:"id"`
+	SoccerUserID            int64     `json:"-"`
+	Username                string    `json:"username"`
+	Nickname                string    `json:"nickname"`
+	PlatformAccessExpiresAt time.Time `json:"-"`
 }
 
 type soccerAuthResponse struct {
-	Code int `json:"code"`
-	Data *struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Data    *struct {
 		User struct {
-			ID       int64  `json:"id"`
-			Username string `json:"username"`
-			Nickname string `json:"nickname"`
-			Status   int    `json:"status"`
+			ID                      int64  `json:"id"`
+			Username                string `json:"username"`
+			Nickname                string `json:"nickname"`
+			Status                  int    `json:"status"`
+			PlatformAccessExpiresAt string `json:"platform_access_expires_at"`
 		} `json:"user"`
 	} `json:"data"`
 }
 
 var (
 	errSoccerAccountDisabled = errors.New("soccer account disabled")
+	errSoccerPlatformExpired = errors.New("soccer platform access expired")
 	errSoccerRateLimited     = errors.New("soccer login rate limited")
 )
 
@@ -197,7 +201,7 @@ func loadConfig() config {
 		soccerMySQLDSN: getenv("SOCCER_MYSQL_DSN", ""),
 		redisAddr:      getenv("REDIS_ADDR", "localhost:6379"), redisPassword: getenv("REDIS_PASSWORD", "redis-dev-password"),
 		jwtSecret: getenv("JWT_SECRET", "local-development-secret-change-before-production"), corsOrigins: origins,
-		soccerAuthURL: getenv("SOCCER_AUTH_URL", "http://localhost/api/v1/auth/login"),
+		soccerAuthURL: getenv("SOCCER_AUTH_URL", "http://localhost/api/v1/auth/platform-login"),
 		softEtherMode: getenv("SOFTETHER_MODE", "mock"), vpncmdPath: getenv("SOFTETHER_VPNCMD_PATH", "/usr/local/bin/vpncmd"),
 		softEtherAdminEndpoint: getenv("SOFTETHER_ADMIN_ENDPOINT", "localhost:5555"), softEtherAdminPassword: getenv("SOFTETHER_ADMIN_PASSWORD", ""),
 		softEtherClientHost: getenv("SOFTETHER_CLIENT_HOST", "pending-softether-host"), softEtherClientPort: envInt("SOFTETHER_CLIENT_PORT", 443),
@@ -266,6 +270,10 @@ func (a *app) login(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, errSoccerAccountDisabled) {
 			respondError(w, http.StatusForbidden, "账号已被禁用")
+			return
+		}
+		if errors.Is(err, errSoccerPlatformExpired) {
+			respondError(w, http.StatusForbidden, "平台使用权限已到期，请联系管理员")
 			return
 		}
 		if errors.Is(err, errSoccerRateLimited) {
@@ -384,6 +392,9 @@ func (a *app) authenticateWithSoccer(ctx context.Context, username, password str
 	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusUnprocessableEntity {
 		return user{}, true, nil
 	}
+	if response.StatusCode == http.StatusForbidden && auth.Code == 1008 {
+		return user{}, false, errSoccerPlatformExpired
+	}
 	if response.StatusCode == http.StatusForbidden {
 		return user{}, false, errSoccerAccountDisabled
 	}
@@ -399,10 +410,15 @@ func (a *app) authenticateWithSoccer(ctx context.Context, username, password str
 	if auth.Data == nil || auth.Data.User.ID == 0 || auth.Data.User.Status != 1 {
 		return user{}, false, fmt.Errorf("soccer auth response has no active user")
 	}
+	platformAccessExpiresAt, err := time.Parse(time.RFC3339, auth.Data.User.PlatformAccessExpiresAt)
+	if err != nil || !platformAccessExpiresAt.After(time.Now()) {
+		return user{}, false, fmt.Errorf("soccer auth response has invalid platform access expiry")
+	}
 	return user{
-		SoccerUserID: auth.Data.User.ID,
-		Username:     auth.Data.User.Username,
-		Nickname:     auth.Data.User.Nickname,
+		SoccerUserID:            auth.Data.User.ID,
+		Username:                auth.Data.User.Username,
+		Nickname:                auth.Data.User.Nickname,
+		PlatformAccessExpiresAt: platformAccessExpiresAt,
 	}, false, nil
 }
 
@@ -415,7 +431,15 @@ func (a *app) respondSession(w http.ResponseWriter, u user) {
 	respondJSON(w, http.StatusOK, map[string]any{"token": token, "user": u})
 }
 func (a *app) issueToken(u user) (string, error) {
-	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims{UserID: u.ID, RegisteredClaims: jwt.RegisteredClaims{Issuer: jwtIssuer, Subject: strconv.FormatInt(u.ID, 10), ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)), IssuedAt: jwt.NewNumericDate(time.Now())}}).SignedString([]byte(a.config.jwtSecret))
+	issuedAt := time.Now()
+	expiresAt := issuedAt.Add(24 * time.Hour)
+	if !u.PlatformAccessExpiresAt.IsZero() && u.PlatformAccessExpiresAt.Before(expiresAt) {
+		expiresAt = u.PlatformAccessExpiresAt
+	}
+	if !expiresAt.After(issuedAt) {
+		return "", errSoccerPlatformExpired
+	}
+	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims{UserID: u.ID, RegisteredClaims: jwt.RegisteredClaims{Issuer: jwtIssuer, Subject: strconv.FormatInt(u.ID, 10), ExpiresAt: jwt.NewNumericDate(expiresAt), IssuedAt: jwt.NewNumericDate(issuedAt)}}).SignedString([]byte(a.config.jwtSecret))
 }
 
 func (a *app) auth(next http.Handler) http.Handler {

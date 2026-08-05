@@ -24,7 +24,7 @@ func TestAuthenticateWithSoccer(t *testing.T) {
 		{
 			name:       "authenticated user",
 			statusCode: http.StatusOK,
-			body:       `{"code":0,"data":{"user":{"id":42,"username":"player","nickname":"Player One","status":1}}}`,
+			body:       `{"code":0,"data":{"user":{"id":42,"username":"player","nickname":"Player One","status":1,"platform_access_expires_at":"2099-12-31T23:59:59+08:00"}}}`,
 		},
 		{
 			name:       "invalid credentials",
@@ -44,6 +44,13 @@ func TestAuthenticateWithSoccer(t *testing.T) {
 			body:       `{"code":1002,"message":"账号已被禁用","data":null}`,
 			wantErr:    true,
 			errorIs:    errSoccerAccountDisabled,
+		},
+		{
+			name:       "platform access expired",
+			statusCode: http.StatusForbidden,
+			body:       `{"code":1008,"message":"平台使用权限已到期，请联系管理员","data":null}`,
+			wantErr:    true,
+			errorIs:    errSoccerPlatformExpired,
 		},
 		{
 			name:       "rate limited",
@@ -81,6 +88,26 @@ func TestAuthenticateWithSoccer(t *testing.T) {
 				t.Fatalf("authenticateWithSoccer() user = %#v", got)
 			}
 		})
+	}
+}
+
+func TestIssueTokenDoesNotOutlivePlatformAccess(t *testing.T) {
+	accessExpiresAt := time.Now().Add(15 * time.Minute).Truncate(time.Second)
+	a := &app{config: config{jwtSecret: "test-secret"}}
+
+	tokenString, err := a.issueToken(user{ID: 42, PlatformAccessExpiresAt: accessExpiresAt})
+	if err != nil {
+		t.Fatalf("issueToken() error = %v", err)
+	}
+	parsed, err := jwt.ParseWithClaims(tokenString, &claims{}, func(_ *jwt.Token) (any, error) {
+		return []byte("test-secret"), nil
+	})
+	if err != nil {
+		t.Fatalf("parse token: %v", err)
+	}
+	got := parsed.Claims.(*claims).ExpiresAt.Time
+	if !got.Equal(accessExpiresAt) {
+		t.Fatalf("token expiry = %v, want %v", got, accessExpiresAt)
 	}
 }
 
