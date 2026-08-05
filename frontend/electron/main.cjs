@@ -5,9 +5,9 @@ const path = require('node:path')
 const { version: appVersion } = require('../package.json')
 
 const DEFAULT_NIC = 'VPN'
-const DEFAULT_VPN_HOST = 'www.jingzhu.top'
+const DEFAULT_VPN_HOST = '8.133.189.9'
 const DEFAULT_VPN_PORT = 992
-const API_URL = process.env.VITE_API_BASE_URL || 'http://www.jingzhu.top:8082/api/v1'
+const API_URL = process.env.VITE_API_BASE_URL || 'http://8.133.189.9:8082/api/v1'
 
 function createWindow() {
   const window = new BrowserWindow({
