@@ -4,7 +4,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 const { version: appVersion } = require('../package.json')
 const { configureGameFirewall } = require('./firewall.cjs')
-const { inspectVpnNetwork, prioritizeVpnNetwork, waitForVpnNetwork } = require('./network.cjs')
+const { inspectVpnNetwork, prioritizeVpnNetwork, runPowerShell, waitForVpnNetwork } = require('./network.cjs')
 
 const DEFAULT_NIC = 'VPN'
 const DEFAULT_VPN_HOST = '8.133.189.9'
@@ -182,6 +182,51 @@ function nicExists(output, nic) {
   return output.split(/\r?\n/).some((line) => line.split('|').some((part) => part.trim().toLowerCase() === nic.toLowerCase()))
 }
 
+function parseAccountStatus(output) {
+  const text = String(output || '')
+  if (/离线|未连接|Disconnected|Offline/i.test(text)) return 'disconnected'
+  if (/连接中|Connecting/i.test(text)) return 'connecting'
+  if (/已连接|Connected|Online/i.test(text)) return 'connected'
+  return 'unknown'
+}
+
+async function getAccountStatus(account) {
+  try {
+    const output = await runVpncmd(['localhost', '/CLIENT', '/CMD', 'AccountStatusGet', account])
+    return parseAccountStatus(output)
+  } catch {
+    return 'missing'
+  }
+}
+
+async function inspectGameNetwork() {
+  if (process.platform !== 'win32') return null
+  const script = `
+$processes = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match '^(WE8|PES8|dpnsvr)$' }
+if (-not $processes) { [Console]::Out.WriteLine('未检测到 WE8/DirectPlay 进程'); exit 0 }
+foreach ($process in $processes) {
+  [Console]::Out.WriteLine(('进程: {0} PID={1}' -f $process.ProcessName, $process.Id))
+}
+$pids = @($processes | ForEach-Object { $_.Id })
+$netstat = & "$env:SystemRoot\\System32\\netstat.exe" -ano -p udp
+$matched = $false
+foreach ($line in $netstat) {
+  foreach ($pid in $pids) {
+    if ($line -match ('\\s' + [Regex]::Escape([string]$pid) + '$')) {
+      $matched = $true
+      [Console]::Out.WriteLine(('UDP: ' + $line.Trim()))
+    }
+  }
+}
+if (-not $matched) { [Console]::Out.WriteLine('UDP: 未检测到 WE8/DirectPlay UDP 监听') }
+`
+  try {
+    return (await runPowerShell(script, 8000)).trim()
+  } catch (error) {
+    return `WE8 网络检测失败：${error.message || error}`
+  }
+}
+
 function apiHostname() {
   try {
     const hostname = new URL(API_URL).hostname
@@ -256,14 +301,19 @@ ipcMain.handle('connect-vpn', async (_event, lease) => {
 ipcMain.handle('restore-vpn', async (_event, lease) => {
   validateIdentifier(lease.username, 'VPN 用户名')
   await prepareDesktop()
-  let network = await inspectVpnNetwork(lease.subnetCidr)
-  if (network.connected) return prioritizeVpnNetwork(lease.subnetCidr)
-
   const account = `WEL-${lease.username}`
+  const accountStatus = await getAccountStatus(account)
+  let network = await inspectVpnNetwork(lease.subnetCidr)
+  if (network.connected && accountStatus === 'connected') return prioritizeVpnNetwork(lease.subnetCidr)
+
   try {
     await runVpncmd(['localhost', '/CLIENT', '/CMD', 'AccountConnect', account])
   } catch {
-    return network
+    return {
+      ...network,
+      connected: false,
+      warnings: [...network.warnings, accountStatus === 'missing' ? 'SoftEther 账号不存在，需要重新进入房间' : 'SoftEther 账号未连接，需要重新进入房间'],
+    }
   }
   network = await waitForVpnNetwork(lease.subnetCidr, 15000)
   return network.connected ? prioritizeVpnNetwork(lease.subnetCidr) : network
@@ -281,11 +331,19 @@ ipcMain.handle('prioritize-vpn', async (_event, lease) => {
 
 ipcMain.handle('copy-vpn-diagnostics', async (_event, lease) => {
   validateIdentifier(lease.username, 'VPN 用户名')
-  const [status, network] = await Promise.all([desktopStatus(), inspectVpnNetwork(lease.subnetCidr)])
+  const account = `WEL-${lease.username}`
+  const [status, network, accountStatus, gameNetwork] = await Promise.all([
+    desktopStatus(),
+    inspectVpnNetwork(lease.subnetCidr),
+    getAccountStatus(account),
+    inspectGameNetwork(),
+  ])
   const lines = [
     `WEL客户端版本: ${appVersion}`,
     `Windows版本: ${status.systemVersion || '未知'}`,
     `SoftEther服务: ${status.serviceRunning ? '运行中' : '未运行'}`,
+    `SoftEther账号: ${account}`,
+    `SoftEther账号状态: ${accountStatus}`,
     `房间: ${lease.hub}`,
     `房间网段: ${lease.subnetCidr}`,
     `实际虚拟IP: ${network.actualIp || '未获取'}`,
@@ -296,6 +354,7 @@ ipcMain.handle('copy-vpn-diagnostics', async (_event, lease) => {
     `VPN DNS: ${network.dnsServers.join(', ') || '无'}`,
     `冲突虚拟网卡: ${network.conflictingAdapters.join('、') || '未检测到'}`,
     `诊断提示: ${network.warnings.join('；') || '无'}`,
+    `WE8网络: ${gameNetwork || '未检测'}`,
   ]
   clipboard.writeText(lines.join('\r\n'))
   return network
