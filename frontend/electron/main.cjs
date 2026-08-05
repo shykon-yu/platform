@@ -4,7 +4,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 const { version: appVersion } = require('../package.json')
 const { configureGameFirewall } = require('./firewall.cjs')
-const { inspectVpnNetwork, prioritizeVpnNetwork, runPowerShell, waitForVpnNetwork } = require('./network.cjs')
+const { decodeProcessOutput, inspectVpnNetwork, prioritizeVpnNetwork, runPowerShell, waitForVpnNetwork } = require('./network.cjs')
 
 const DEFAULT_NIC = 'VPN'
 const DEFAULT_VPN_HOST = '8.133.189.9'
@@ -155,14 +155,16 @@ async function prepareDesktop() {
 function runVpncmd(args) {
   return new Promise((resolve, reject) => {
     const child = spawn(locateVpncmd(), args, { windowsHide: true, windowsVerbatimArguments: false })
-    let stdout = ''
-    let stderr = ''
-    child.stdout.on('data', (chunk) => { stdout += chunk.toString() })
-    child.stderr.on('data', (chunk) => { stderr += chunk.toString() })
+    const stdout = []
+    const stderr = []
+    child.stdout.on('data', (chunk) => { stdout.push(chunk) })
+    child.stderr.on('data', (chunk) => { stderr.push(chunk) })
     child.on('error', (error) => reject(`无法启动 SoftEther 客户端：${error.message}`))
     child.on('close', (code) => {
-      if (code === 0) return resolve(stdout)
-      const detail = [stdout.trim(), stderr.trim()].filter(Boolean).join('\n')
+      const stdoutText = decodeProcessOutput(stdout)
+      const stderrText = decodeProcessOutput(stderr)
+      if (code === 0) return resolve(stdoutText)
+      const detail = [stdoutText.trim(), stderrText.trim()].filter(Boolean).join('\n')
       reject(`SoftEther 客户端命令执行失败：${args[args.indexOf('/CMD') + 1] || 'vpncmd'}${detail ? `\n${detail}` : ''}`)
     })
   })
@@ -184,9 +186,9 @@ function nicExists(output, nic) {
 
 function parseAccountStatus(output) {
   const text = String(output || '')
-  if (/离线|未连接|Disconnected|Offline/i.test(text)) return 'disconnected'
-  if (/连接中|Connecting/i.test(text)) return 'connecting'
-  if (/已连接|Connected|Online/i.test(text)) return 'connected'
+  if (/离线|未连接|断开|Disconnected|Offline/i.test(text)) return 'disconnected'
+  if (/连接中|正在连接|Connecting/i.test(text)) return 'connecting'
+  if (/已连接|连接完成|连接成功|Connected|Online|Established/i.test(text)) return 'connected'
   return 'unknown'
 }
 

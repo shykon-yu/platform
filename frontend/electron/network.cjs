@@ -3,6 +3,17 @@ const { spawn } = require('node:child_process')
 
 const CONFLICTING_ADAPTER_PATTERN = /tap-windows|tap adapter|openvpn|zerotier|radmin vpn|hamachi|softether vpn client adapter/i
 
+function decodeProcessOutput(chunks) {
+  const buffer = Buffer.concat(chunks)
+  const utf8 = buffer.toString('utf8')
+  if (!utf8.includes('\uFFFD')) return utf8
+  try {
+    return new TextDecoder('gb18030').decode(buffer)
+  } catch {
+    return utf8
+  }
+}
+
 function ipv4ToNumber(value) {
   const parts = String(value || '').split('.').map(Number)
   if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return null
@@ -59,26 +70,32 @@ function parseAdapterOutput(output) {
 
 function runPowerShell(script, timeoutMs = 8000) {
   return new Promise((resolve, reject) => {
-    const encoded = Buffer.from(script, 'utf16le').toString('base64')
+    const utf8Script = `
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+$OutputEncoding = [Text.Encoding]::UTF8
+${script}`
+    const encoded = Buffer.from(utf8Script, 'utf16le').toString('base64')
     const child = spawn('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded], {
       windowsHide: true,
     })
-    let stdout = ''
-    let stderr = ''
+    const stdout = []
+    const stderr = []
     const timer = setTimeout(() => {
       child.kill()
       reject(new Error('读取 Windows 网卡配置超时'))
     }, timeoutMs)
-    child.stdout.on('data', (chunk) => { stdout += chunk.toString() })
-    child.stderr.on('data', (chunk) => { stderr += chunk.toString() })
+    child.stdout.on('data', (chunk) => { stdout.push(chunk) })
+    child.stderr.on('data', (chunk) => { stderr.push(chunk) })
     child.once('error', (error) => {
       clearTimeout(timer)
       reject(error)
     })
     child.once('close', (code) => {
       clearTimeout(timer)
-      if (code === 0) resolve(stdout)
-      else reject(new Error(stderr.trim() || `PowerShell 退出代码 ${code}`))
+      const stdoutText = decodeProcessOutput(stdout)
+      const stderrText = decodeProcessOutput(stderr)
+      if (code === 0) resolve(stdoutText)
+      else reject(new Error(stderrText.trim() || `PowerShell 退出代码 ${code}`))
     })
   })
 }
@@ -205,6 +222,7 @@ async function waitForVpnNetwork(cidr, timeoutMs = 30000) {
 module.exports = {
   analyzeNetwork,
   buildVpnPriorityScript,
+  decodeProcessOutput,
   findRoomAddress,
   inspectVpnNetwork,
   isIPv4InCIDR,
