@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { FolderOpen, Gamepad2, LogOut, Play, RefreshCw, Router, ShieldCheck, Users } from 'lucide-vue-next'
 import { API_BASE_URL, ApiError, authApi, clearToken, roomApi, setToken, type Lease, type Room, type User } from './api'
 
-const APP_VERSION = 'v0.1.2'
+const APP_VERSION = 'v0.1.3'
 const API_SERVER_LABEL = (() => {
   try {
     const url = new URL(API_BASE_URL)
