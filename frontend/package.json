@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vue-tsc --noEmit && vite build",
-    "test:electron": "node --test electron/*.test.cjs",
+    "test:electron": "node --test electron/network.test.cjs electron/firewall.test.cjs",
     "electron:dev": "npm run build && electron electron/main.cjs",
     "electron:build": "npm run build && node scripts/download-softether.cjs && node scripts/extract-softether-runtime.cjs && electron-builder --win nsis",
     "electron": "electron"
