@@ -1,4 +1,5 @@
 const apiBase = import.meta.env.VITE_API_BASE_URL ?? 'http://8.133.189.9:8082/api/v1'
+export const API_BASE_URL = apiBase
 const ACCESS_TOKEN_KEY = 'we8.access-token'
 const LEGACY_ACCESS_TOKEN_KEY = 'pes8.access-token'
 
