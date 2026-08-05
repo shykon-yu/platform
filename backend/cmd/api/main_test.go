@@ -94,7 +94,7 @@ func TestAuthenticateWithSoccer(t *testing.T) {
 
 func TestIssueTokenDoesNotOutlivePlatformAccess(t *testing.T) {
 	accessExpiresAt := time.Now().Add(15 * time.Minute).Truncate(time.Second)
-	a := &app{config: config{jwtSecret: "test-secret"}}
+	a := &app{config: config{jwtSecret: "test-secret", jwtAudience: "test-server"}}
 
 	tokenString, err := a.issueToken(user{ID: 42, SessionID: "current-session", PlatformAccessExpiresAt: accessExpiresAt})
 	if err != nil {
@@ -114,7 +114,7 @@ func TestIssueTokenDoesNotOutlivePlatformAccess(t *testing.T) {
 
 func TestAuthRequiresPlatformIssuer(t *testing.T) {
 	a := &app{
-		config: config{jwtSecret: "test-secret"},
+		config: config{jwtSecret: "test-secret", jwtAudience: "test-server"},
 		validateSession: func(_ context.Context, userID int64, sessionID string) (bool, error) {
 			return userID == 42 && sessionID == "current-session", nil
 		},
@@ -141,6 +141,19 @@ func TestAuthRequiresPlatformIssuer(t *testing.T) {
 		t.Fatalf("valid token status = %d", validResponse.Code)
 	}
 
+	otherServer := &app{config: config{jwtSecret: "test-secret", jwtAudience: "other-server"}}
+	otherServerToken, err := otherServer.issueToken(user{ID: 42, SessionID: "current-session"})
+	if err != nil {
+		t.Fatalf("issue other server token: %v", err)
+	}
+	otherServerRequest := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
+	otherServerRequest.Header.Set("Authorization", "Bearer "+otherServerToken)
+	otherServerResponse := httptest.NewRecorder()
+	protected.ServeHTTP(otherServerResponse, otherServerRequest)
+	if otherServerResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("other server token status = %d, want %d", otherServerResponse.Code, http.StatusUnauthorized)
+	}
+
 	legacyToken, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims{
 		UserID: 42,
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -162,7 +175,7 @@ func TestAuthRequiresPlatformIssuer(t *testing.T) {
 
 func TestAuthRejectsReplacedSession(t *testing.T) {
 	a := &app{
-		config: config{jwtSecret: "test-secret"},
+		config: config{jwtSecret: "test-secret", jwtAudience: "test-server"},
 		validateSession: func(_ context.Context, _ int64, _ string) (bool, error) {
 			return false, nil
 		},

@@ -1,5 +1,6 @@
 const apiBase = import.meta.env.VITE_API_BASE_URL ?? 'http://8.133.189.9:8082/api/v1'
-const ACCESS_TOKEN_KEY = 'we8.access-token'
+const ACCESS_TOKEN_KEY = `we8.access-token:${apiBase}`
+const UNSCOPED_ACCESS_TOKEN_KEY = 'we8.access-token'
 const LEGACY_ACCESS_TOKEN_KEY = 'pes8.access-token'
 
 export type User = { id: number; username: string; nickname: string }
@@ -7,7 +8,9 @@ export type Room = { id: number; code: string; name: string; region: string; sub
 export type Lease = { room_id: number; virtual_ip: string; username: string; password?: string; hub_name: string; subnet_cidr: string; expires_at: string; server_host: string; server_port: number }
 
 type SessionResponse = { token: string; user: User }
-let token = localStorage.getItem(ACCESS_TOKEN_KEY) ?? localStorage.getItem(LEGACY_ACCESS_TOKEN_KEY) ?? ''
+localStorage.removeItem(UNSCOPED_ACCESS_TOKEN_KEY)
+localStorage.removeItem(LEGACY_ACCESS_TOKEN_KEY)
+let token = localStorage.getItem(ACCESS_TOKEN_KEY) ?? ''
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly code?: string) {
@@ -19,12 +22,14 @@ export class ApiError extends Error {
 export function setToken(value: string) {
   token = value
   localStorage.setItem(ACCESS_TOKEN_KEY, value)
+  localStorage.removeItem(UNSCOPED_ACCESS_TOKEN_KEY)
   localStorage.removeItem(LEGACY_ACCESS_TOKEN_KEY)
 }
 
 export function clearToken() {
   token = ''
   localStorage.removeItem(ACCESS_TOKEN_KEY)
+  localStorage.removeItem(UNSCOPED_ACCESS_TOKEN_KEY)
   localStorage.removeItem(LEGACY_ACCESS_TOKEN_KEY)
 }
 

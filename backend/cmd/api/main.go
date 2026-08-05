@@ -30,7 +30,7 @@ import (
 
 type config struct {
 	port, mysqlDSN, soccerMySQLDSN, redisAddr, redisPassword string
-	jwtSecret, soccerAuthURL                                 string
+	jwtSecret, jwtAudience, soccerAuthURL                    string
 	corsOrigins                                              map[string]bool
 	softEtherMode, vpncmdPath, softEtherAdminEndpoint        string
 	softEtherAdminPassword, softEtherClientHost              string
@@ -38,13 +38,13 @@ type config struct {
 }
 
 type app struct {
-	db       *sql.DB
-	redis    *redis.Client
-	config   config
-	logger   *slog.Logger
-	http     *http.Client
-	upgrader websocket.Upgrader
-	vpn      vpn.Provisioner
+	db              *sql.DB
+	redis           *redis.Client
+	config          config
+	logger          *slog.Logger
+	http            *http.Client
+	upgrader        websocket.Upgrader
+	vpn             vpn.Provisioner
 	validateSession func(context.Context, int64, string) (bool, error)
 }
 
@@ -200,15 +200,16 @@ func loadConfig() config {
 	for _, origin := range strings.Split(getenv("CORS_ORIGIN", defaultCORSOrigin), ",") {
 		origins[strings.TrimSpace(origin)] = true
 	}
+	softEtherClientHost := getenv("SOFTETHER_CLIENT_HOST", "pending-softether-host")
 	return config{
 		port: getenv("API_PORT", "8080"), mysqlDSN: getenv("MYSQL_DSN", "pes8:pes8-dev-password@tcp(localhost:3306)/pes8_platform?parseTime=true&charset=utf8mb4&loc=Local"),
 		soccerMySQLDSN: getenv("SOCCER_MYSQL_DSN", ""),
 		redisAddr:      getenv("REDIS_ADDR", "localhost:6379"), redisPassword: getenv("REDIS_PASSWORD", "redis-dev-password"),
-		jwtSecret: getenv("JWT_SECRET", "local-development-secret-change-before-production"), corsOrigins: origins,
+		jwtSecret: getenv("JWT_SECRET", "local-development-secret-change-before-production"), jwtAudience: getenv("JWT_AUDIENCE", "we8-platform:"+softEtherClientHost), corsOrigins: origins,
 		soccerAuthURL: getenv("SOCCER_AUTH_URL", "http://localhost/api/v1/auth/platform-login"),
 		softEtherMode: getenv("SOFTETHER_MODE", "mock"), vpncmdPath: getenv("SOFTETHER_VPNCMD_PATH", "/usr/local/bin/vpncmd"),
 		softEtherAdminEndpoint: getenv("SOFTETHER_ADMIN_ENDPOINT", "localhost:5555"), softEtherAdminPassword: getenv("SOFTETHER_ADMIN_PASSWORD", ""),
-		softEtherClientHost: getenv("SOFTETHER_CLIENT_HOST", "pending-softether-host"), softEtherClientPort: envInt("SOFTETHER_CLIENT_PORT", 443),
+		softEtherClientHost: softEtherClientHost, softEtherClientPort: envInt("SOFTETHER_CLIENT_PORT", 443),
 	}
 }
 
@@ -457,7 +458,7 @@ func (a *app) issueToken(u user) (string, error) {
 	if !expiresAt.After(issuedAt) {
 		return "", errSoccerPlatformExpired
 	}
-	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims{UserID: u.ID, SessionID: u.SessionID, RegisteredClaims: jwt.RegisteredClaims{Issuer: jwtIssuer, Subject: strconv.FormatInt(u.ID, 10), ExpiresAt: jwt.NewNumericDate(expiresAt), IssuedAt: jwt.NewNumericDate(issuedAt)}}).SignedString([]byte(a.config.jwtSecret))
+	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims{UserID: u.ID, SessionID: u.SessionID, RegisteredClaims: jwt.RegisteredClaims{Issuer: jwtIssuer, Subject: strconv.FormatInt(u.ID, 10), Audience: jwt.ClaimStrings{a.config.jwtAudience}, ExpiresAt: jwt.NewNumericDate(expiresAt), IssuedAt: jwt.NewNumericDate(issuedAt)}}).SignedString([]byte(a.config.jwtSecret))
 }
 
 type leaseCredential struct {
@@ -585,7 +586,7 @@ func (a *app) auth(next http.Handler) http.Handler {
 				return nil, errors.New("unexpected signing method")
 			}
 			return []byte(a.config.jwtSecret), nil
-		}, jwt.WithIssuer(jwtIssuer), jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
+		}, jwt.WithIssuer(jwtIssuer), jwt.WithAudience(a.config.jwtAudience), jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
 		if err != nil || !token.Valid {
 			respondErrorCode(w, http.StatusUnauthorized, "AUTH_INVALID", "登录已失效，请重新登录")
 			return
@@ -622,7 +623,7 @@ func currentIdentity(r *http.Request) authIdentity {
 	return identity
 }
 
-func currentUserID(r *http.Request) int64    { return currentIdentity(r).UserID }
+func currentUserID(r *http.Request) int64     { return currentIdentity(r).UserID }
 func currentSessionID(r *http.Request) string { return currentIdentity(r).SessionID }
 
 func (a *app) logout(w http.ResponseWriter, r *http.Request) {

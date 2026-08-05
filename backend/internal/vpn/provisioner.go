@@ -1,12 +1,14 @@
 package vpn
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os/exec"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -85,7 +87,21 @@ func (p *vpncmdProvisioner) Revoke(ctx context.Context, hub, username string) er
 	if !safeIdentifier.MatchString(hub) || !safeIdentifier.MatchString(username) {
 		return errors.New("invalid SoftEther hub or username")
 	}
-	return p.command(ctx, hub, "UserDelete", username)
+	var revokeErrors []error
+	output, err := p.commandOutput(ctx, hub, "SessionList")
+	if err != nil {
+		revokeErrors = append(revokeErrors, err)
+	} else {
+		for _, sessionName := range sessionsForUser(output, username) {
+			if err := p.command(ctx, hub, "SessionDisconnect", sessionName); err != nil {
+				revokeErrors = append(revokeErrors, err)
+			}
+		}
+	}
+	if err := p.command(ctx, hub, "UserDelete", username); err != nil {
+		revokeErrors = append(revokeErrors, err)
+	}
+	return errors.Join(revokeErrors...)
 }
 
 func (p *vpncmdProvisioner) Renew(ctx context.Context, hub, username string, expiresAt time.Time) error {
@@ -101,6 +117,11 @@ func softEtherExpiresAt(expiresAt time.Time) string {
 }
 
 func (p *vpncmdProvisioner) command(ctx context.Context, hub, command string, args ...string) error {
+	_, err := p.commandOutput(ctx, hub, command, args...)
+	return err
+}
+
+func (p *vpncmdProvisioner) commandOutput(ctx context.Context, hub, command string, args ...string) ([]byte, error) {
 	commandCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	baseArgs := []string{p.endpoint, "/SERVER", "/PASSWORD:" + p.password, "/ADMINHUB:" + hub, "/CMD", command}
@@ -110,10 +131,35 @@ func (p *vpncmdProvisioner) command(ctx context.Context, hub, command string, ar
 			return exec.CommandContext(ctx, path, args...).CombinedOutput()
 		}
 	}
-	_, err := execute(commandCtx, p.path, append(baseArgs, args...)...)
+	output, err := execute(commandCtx, p.path, append(baseArgs, args...)...)
 	if err != nil {
-		p.logger.Error("vpncmd failed", "hub", hub, "command", command, "error", err)
-		return fmt.Errorf("vpncmd %s failed: %w", command, err)
+		if p.logger != nil {
+			p.logger.Error("vpncmd failed", "hub", hub, "command", command, "error", err)
+		}
+		return output, fmt.Errorf("vpncmd %s failed: %w", command, err)
 	}
-	return nil
+	return output, nil
+}
+
+func sessionsForUser(output []byte, username string) []string {
+	sessions := make([]string, 0)
+	currentSession := ""
+	scanner := bufio.NewScanner(strings.NewReader(string(output)))
+	for scanner.Scan() {
+		parts := strings.SplitN(scanner.Text(), "|", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key, value := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+		switch key {
+		case "Session Name":
+			currentSession = value
+		case "User Name":
+			if value == username && safeIdentifier.MatchString(currentSession) {
+				sessions = append(sessions, currentSession)
+			}
+			currentSession = ""
+		}
+	}
+	return sessions
 }

@@ -55,3 +55,48 @@ func TestVPNCmdRenewOnlyUpdatesExpiration(t *testing.T) {
 		t.Fatalf("Renew() must not recreate the connected user: %q", command)
 	}
 }
+
+func TestVPNCmdRevokeDisconnectsMatchingSessionsBeforeDeletingUser(t *testing.T) {
+	commands := make([]string, 0)
+	provider := &vpncmdProvisioner{
+		path:     "vpncmd",
+		endpoint: "localhost:5555",
+		password: "secret",
+		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		execute: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+			command := strings.Join(args, " ")
+			commands = append(commands, command)
+			if strings.Contains(command, "/CMD SessionList") {
+				return []byte(`Session Name|SID-TARGET-1
+User Name   |room-1-user-2
+Session Name|SID-OTHER-1
+User Name   |room-1-user-3
+Session Name|SID-TARGET-2
+User Name   |room-1-user-2
+`), nil
+			}
+			return nil, nil
+		},
+	}
+
+	if err := provider.Revoke(context.Background(), "we8-room-01", "room-1-user-2"); err != nil {
+		t.Fatalf("Revoke() error = %v", err)
+	}
+	joined := strings.Join(commands, "\n")
+	for _, expected := range []string{
+		"/CMD SessionList",
+		"/CMD SessionDisconnect SID-TARGET-1",
+		"/CMD SessionDisconnect SID-TARGET-2",
+		"/CMD UserDelete room-1-user-2",
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("Revoke() commands missing %q:\n%s", expected, joined)
+		}
+	}
+	if strings.Contains(joined, "SessionDisconnect SID-OTHER-1") {
+		t.Fatalf("Revoke() disconnected another user:\n%s", joined)
+	}
+	if len(commands) != 4 {
+		t.Fatalf("Revoke() command count = %d, want 4:\n%s", len(commands), joined)
+	}
+}
