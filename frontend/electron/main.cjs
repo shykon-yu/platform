@@ -4,7 +4,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 const { version: appVersion } = require('../package.json')
 const { configureGameFirewall } = require('./firewall.cjs')
-const { decodeProcessOutput, inspectVpnNetwork, prioritizeVpnNetwork, runPowerShell, waitForVpnNetwork } = require('./network.cjs')
+const { decodeProcessOutput, findNetstatLines, inspectVpnNetwork, parseTasklistPids, prioritizeVpnNetwork, runPowerShell, runProcess, waitForVpnNetwork } = require('./network.cjs')
 
 const DEFAULT_NIC = 'VPN'
 const DEFAULT_VPN_HOST = '8.133.189.9'
@@ -203,36 +203,27 @@ async function getAccountStatus(account) {
 
 async function inspectGameNetwork() {
   if (process.platform !== 'win32') return null
-  const script = `
-$processes = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match '^(WE8|PES8|dpnsvr)$' }
-if (-not $processes) { [Console]::Out.WriteLine('未检测到 WE8/DirectPlay 进程'); exit 0 }
-foreach ($process in $processes) {
-  [Console]::Out.WriteLine(('进程: {0} PID={1}' -f $process.ProcessName, $process.Id))
-}
-$pids = @($processes | ForEach-Object { $_.Id })
-$udpMatched = $false
-$udpLines = & "$env:SystemRoot\\System32\\netstat.exe" -ano -p udp
-foreach ($line in $udpLines) {
-  foreach ($pid in $pids) {
-    if ($line -match ('\\s' + [Regex]::Escape([string]$pid) + '$')) {
-      $udpMatched = $true
-      [Console]::Out.WriteLine(('UDP: ' + $line.Trim()))
-    }
-  }
-}
-
-$tcpLines = & "$env:SystemRoot\\System32\\netstat.exe" -ano -p tcp
-foreach ($line in $tcpLines) {
-  foreach ($pid in $pids) {
-    if ($line -match ('\\s' + [Regex]::Escape([string]$pid) + '$')) {
-      [Console]::Out.WriteLine(('TCP: ' + $line.Trim()))
-    }
-  }
-}
-if (-not $udpMatched) { [Console]::Out.WriteLine('UDP: 未检测到 WE8/DirectPlay UDP 监听') }
-`
+  const system32 = `${process.env.SystemRoot || 'C:\\Windows'}\\System32`
   try {
-    return (await runPowerShell(script, 8000)).trim()
+    const tasklist = await runProcess(`${system32}\\tasklist.exe`, ['/FO', 'CSV', '/NH'])
+    const processes = parseTasklistPids(tasklist)
+    if (!processes.length) return '未检测到 WE8/DirectPlay 进程'
+
+    const processText = processes.map(({ name, pid }) => `进程: ${name} PID=${pid}`)
+    const [udpResult, tcpResult] = await Promise.allSettled([
+      runProcess(`${system32}\\netstat.exe`, ['-ano', '-p', 'udp']),
+      runProcess(`${system32}\\netstat.exe`, ['-ano', '-p', 'tcp']),
+    ])
+    const udpLines = udpResult.status === 'fulfilled' ? findNetstatLines(udpResult.value, processes) : []
+    const tcpLines = tcpResult.status === 'fulfilled' ? findNetstatLines(tcpResult.value, processes) : []
+    const lines = [...processText]
+    lines.push(...udpLines.map((line) => `UDP: ${line}`))
+    lines.push(...tcpLines.map((line) => `TCP: ${line}`))
+    if (!udpLines.length) lines.push('UDP: 当前未捕捉到 WE8/DirectPlay UDP 监听，已能联机时可忽略')
+    if (udpResult.status === 'rejected' && tcpResult.status === 'rejected') {
+      lines.push('网络端口读取失败，但 WE8 进程已检测到')
+    }
+    return lines.join('\n')
   } catch (error) {
     return `WE8 网络检测失败：${error.message || error}`
   }
@@ -363,7 +354,7 @@ ipcMain.handle('copy-vpn-diagnostics', async (_event, lease) => {
     `VPN接口跃点: ${network.interfaceMetric ?? '未知'}`,
     `VPN默认网关: ${network.defaultGateways.join(', ') || '无'}`,
     `VPN DNS: ${network.dnsServers.join(', ') || '无'}`,
-    `冲突虚拟网卡: ${network.conflictingAdapters.join('、') || '未检测到'}`,
+    `其他已启用虚拟网卡: ${network.conflictingAdapters.join('、') || '未检测到'}`,
     `诊断提示: ${network.warnings.join('；') || '无'}`,
     `WE8网络: ${gameNetwork || '未检测'}`,
   ]

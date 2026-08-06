@@ -19,6 +19,7 @@ export type DesktopLeaseStatus = {
   defaultGateways: string[]
   dnsServers: string[]
   conflictingAdapters: string[]
+  conflictingAdapterIndexes: number[]
   warnings: string[]
   nicName?: string
 }

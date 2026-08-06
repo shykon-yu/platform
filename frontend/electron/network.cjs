@@ -133,6 +133,25 @@ function parseNetshInterfaces(output) {
   }).filter(Boolean)
 }
 
+function parseTasklistPids(output) {
+  const processNames = /^(WE8|PES8|dpnsvr)\.exe$/i
+  return String(output || '').split(/\r?\n/).map((line) => {
+    const match = line.match(/^"([^"]+)","(\d+)"/)
+    if (!match || !processNames.test(match[1])) return null
+    return { name: match[1].replace(/\.exe$/i, ''), pid: Number(match[2]) }
+  }).filter(Boolean)
+}
+
+function findNetstatLines(output, processes) {
+  const pidSet = new Set(processes.map(({ pid }) => String(pid)))
+  return String(output || '').split(/\r?\n/).map((line) => {
+    const trimmed = line.trim()
+    if (!trimmed) return null
+    const fields = trimmed.split(/\s+/)
+    return pidSet.has(fields.at(-1)) ? trimmed : null
+  }).filter(Boolean)
+}
+
 async function queryNetshInterface(name) {
   if (process.platform !== 'win32' || !name) return null
   const netsh = `${process.env.SystemRoot || 'C:\\Windows'}\\System32\\netsh.exe`
@@ -173,9 +192,13 @@ function analyzeNetwork(cidr, roomAddress, adapters) {
   const roomAdapter = actualIp
     ? adapters.find((adapter) => adapter.ipAddresses.includes(actualIp)) || null
     : null
-  const conflictingAdapters = adapters
+  const conflictingAdapterDetails = adapters
     .filter((adapter) => adapter.ipEnabled && adapter !== roomAdapter && CONFLICTING_ADAPTER_PATTERN.test(adapter.description))
-    .map((adapter) => adapter.description)
+  const conflictingAdapters = conflictingAdapterDetails.map((adapter) => adapter.description)
+  const conflictingAdapterIndexes = conflictingAdapterDetails
+    .filter((adapter) => adapter.interfaceMetric === null || adapter.interfaceMetric < 5000)
+    .map((adapter) => adapter.interfaceIndex)
+    .filter((interfaceIndex) => Number.isInteger(interfaceIndex) && interfaceIndex > 0)
   const warnings = []
 
   if (!actualIp) warnings.push(`尚未获取房间网段 ${cidr} 的虚拟 IP`)
@@ -184,7 +207,7 @@ function analyzeNetwork(cidr, roomAddress, adapters) {
   if (roomAdapter && roomAdapter.interfaceMetric !== null && roomAdapter.interfaceMetric > 5) {
     warnings.push(`VPN 网卡跃点较高：${roomAdapter.interfaceMetric}`)
   }
-  if (conflictingAdapters.length) warnings.push(`检测到其他已启用虚拟网卡：${conflictingAdapters.join('、')}`)
+  if (conflictingAdapterIndexes.length) warnings.push(`检测到可能干扰 WE8 的虚拟网卡：${conflictingAdapters.join('、')}`)
 
   return {
     connected: Boolean(actualIp),
@@ -197,6 +220,7 @@ function analyzeNetwork(cidr, roomAddress, adapters) {
     defaultGateways: roomAdapter?.defaultGateways || [],
     dnsServers: roomAdapter?.dnsServers || [],
     conflictingAdapters,
+    conflictingAdapterIndexes,
     warnings,
   }
 }
@@ -225,13 +249,19 @@ async function inspectVpnNetwork(cidr) {
   }
 }
 
-function buildVpnPriorityScript(interfaceIndex) {
+function buildVpnPriorityScript(interfaceIndex, conflictingAdapterIndexes = []) {
   const index = Number(interfaceIndex)
   if (!Number.isInteger(index) || index <= 0) throw new Error('VPN 网卡接口编号无效')
+  const conflictingIndexes = [...new Set(conflictingAdapterIndexes.map(Number))]
+    .filter((candidate) => Number.isInteger(candidate) && candidate > 0 && candidate !== index)
+  const lowerConflictingMetrics = conflictingIndexes.map((candidate) => `
+& $netsh interface ipv4 set interface "interface=${candidate}" "metric=5000" "store=persistent" | Out-Null
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }`).join('')
   return `
 $netsh = Join-Path $env:SystemRoot 'System32\\netsh.exe'
 & $netsh interface ipv4 set interface "interface=${index}" "metric=1" "store=persistent" | Out-Null
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+${lowerConflictingMetrics}
 `
 }
 
@@ -248,10 +278,11 @@ exit $process.ExitCode
 
 async function prioritizeVpnNetwork(cidr) {
   const network = await inspectVpnNetwork(cidr)
-  if (!network.connected || network.interfaceIndex === null || network.interfaceMetric === 1) return network
+  if (!network.connected || network.interfaceIndex === null) return network
+  if (network.interfaceMetric === 1 && network.conflictingAdapterIndexes.length === 0) return network
 
   try {
-    await runElevatedPowerShell(buildVpnPriorityScript(network.interfaceIndex))
+    await runElevatedPowerShell(buildVpnPriorityScript(network.interfaceIndex, network.conflictingAdapterIndexes))
     await new Promise((resolve) => setTimeout(resolve, 500))
     return inspectVpnNetwork(cidr)
   } catch {
@@ -276,12 +307,15 @@ module.exports = {
   analyzeNetwork,
   buildVpnPriorityScript,
   decodeProcessOutput,
+  findNetstatLines,
   findRoomAddress,
   inspectVpnNetwork,
   isIPv4InCIDR,
   parseAdapterOutput,
   parseNetshInterfaces,
+  parseTasklistPids,
   prioritizeVpnNetwork,
   runPowerShell,
+  runProcess,
   waitForVpnNetwork,
 }
