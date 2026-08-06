@@ -211,39 +211,21 @@ foreach ($process in $processes) {
 }
 $pids = @($processes | ForEach-Object { $_.Id })
 $udpMatched = $false
-
-try {
-  $udpEndpoints = Get-NetUDPEndpoint -ErrorAction Stop | Where-Object { $pids -contains $_.OwningProcess }
-  foreach ($endpoint in $udpEndpoints) {
-    $udpMatched = $true
-    [Console]::Out.WriteLine(('UDP: {0}:{1} PID={2}' -f $endpoint.LocalAddress, $endpoint.LocalPort, $endpoint.OwningProcess))
-  }
-} catch {}
-
-if (-not $udpMatched) {
-  $netstat = & "$env:SystemRoot\\System32\\netstat.exe" -ano -p udp
-  foreach ($line in $netstat) {
-    foreach ($pid in $pids) {
-      if ($line -match ('\\s' + [Regex]::Escape([string]$pid) + '$')) {
-        $udpMatched = $true
-        [Console]::Out.WriteLine(('UDP: ' + $line.Trim()))
-      }
+$udpLines = & "$env:SystemRoot\\System32\\netstat.exe" -ano -p udp
+foreach ($line in $udpLines) {
+  foreach ($pid in $pids) {
+    if ($line -match ('\\s' + [Regex]::Escape([string]$pid) + '$')) {
+      $udpMatched = $true
+      [Console]::Out.WriteLine(('UDP: ' + $line.Trim()))
     }
   }
 }
 
-try {
-  $tcpConnections = Get-NetTCPConnection -ErrorAction Stop | Where-Object { $pids -contains $_.OwningProcess }
-  foreach ($connection in $tcpConnections) {
-    [Console]::Out.WriteLine(('TCP: {0} {1}:{2} -> {3}:{4} PID={5}' -f $connection.State, $connection.LocalAddress, $connection.LocalPort, $connection.RemoteAddress, $connection.RemotePort, $connection.OwningProcess))
-  }
-} catch {
-  $netstat = & "$env:SystemRoot\\System32\\netstat.exe" -ano -p tcp
-  foreach ($line in $netstat) {
-    foreach ($pid in $pids) {
-      if ($line -match ('\\s' + [Regex]::Escape([string]$pid) + '$')) {
-        [Console]::Out.WriteLine(('TCP: ' + $line.Trim()))
-      }
+$tcpLines = & "$env:SystemRoot\\System32\\netstat.exe" -ano -p tcp
+foreach ($line in $tcpLines) {
+  foreach ($pid in $pids) {
+    if ($line -match ('\\s' + [Regex]::Escape([string]$pid) + '$')) {
+      [Console]::Out.WriteLine(('TCP: ' + $line.Trim()))
     }
   }
 }

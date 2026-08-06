@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ClipboardCopy, FolderOpen, Gamepad2, LogOut, Play, RefreshCw, Router, ShieldCheck, Users } from 'lucide-vue-next'
-import { ApiError, authApi, clearToken, hasToken, roomApi, setToken, type Lease, type Room, type User } from './api'
+import { ApiError, authApi, clearToken, hasToken, roomApi, setToken, type Lease, type Room, type RoomMember, type User } from './api'
 import type { DesktopLeaseStatus } from './electron'
 import packageInfo from '../package.json'
 
@@ -20,6 +20,7 @@ type DesktopStatus = {
 const user = ref<User | null>(null)
 const rooms = ref<Room[]>([])
 const activeLease = ref<Lease | null>(null)
+const roomMembers = ref<RoomMember[]>([])
 const networkStatus = ref<DesktopLeaseStatus | null>(null)
 const loading = ref(false)
 const errorMessage = ref('')
@@ -51,8 +52,10 @@ const gamePathLabel = computed(() => gamePath.value.trim() || '未选择 WE8 游
 const desktop = () => window.we8Desktop
 const heartbeatIntervalMs = 5 * 60 * 1000
 const sessionCheckIntervalMs = 30 * 1000
+const roomMembersIntervalMs = 15 * 1000
 let heartbeatTimer: number | undefined
 let sessionCheckTimer: number | undefined
+let roomMembersTimer: number | undefined
 let signingOut = false
 
 function stopLeaseHeartbeat() {
@@ -78,6 +81,30 @@ function startSessionMonitor() {
   sessionCheckTimer = window.setInterval(() => { void checkSession() }, sessionCheckIntervalMs)
 }
 
+function stopRoomMembersMonitor() {
+  if (roomMembersTimer !== undefined) window.clearInterval(roomMembersTimer)
+  roomMembersTimer = undefined
+  roomMembers.value = []
+}
+
+function startRoomMembersMonitor() {
+  stopRoomMembersMonitor()
+  if (!activeLease.value) return
+  void loadRoomMembers()
+  roomMembersTimer = window.setInterval(() => { void loadRoomMembers() }, roomMembersIntervalMs)
+}
+
+async function loadRoomMembers() {
+  const lease = activeLease.value
+  if (!lease) return
+  try {
+    const result = await roomApi.members(lease.room_id)
+    if (activeLease.value?.room_id === lease.room_id) roomMembers.value = result.members
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401) await forceSignedOut(error.message)
+  }
+}
+
 async function checkSession() {
   if (!user.value || signingOut) return
   try {
@@ -92,6 +119,7 @@ async function forceSignedOut(message: string) {
   signingOut = true
   stopLeaseHeartbeat()
   stopSessionMonitor()
+  stopRoomMembersMonitor()
   const lease = activeLease.value
   if (lease) {
     try { await desktop()?.disconnectVpn(lease.username) } catch { /* the server has already revoked this session */ }
@@ -141,6 +169,7 @@ async function renewLease() {
     }
     if (error instanceof ApiError && (error.status === 404 || error.status === 409)) {
       stopLeaseHeartbeat()
+      stopRoomMembersMonitor()
       try { await desktop()?.disconnectVpn(lease.username) } catch { /* local connection may already be gone */ }
       activeLease.value = null
       networkStatus.value = null
@@ -168,6 +197,7 @@ async function authenticate() {
     form.value.password = ''
     activeLease.value = (await authApi.roomSession()).lease
     startLeaseHeartbeat()
+    startRoomMembersMonitor()
     await loadRooms()
     startSessionMonitor()
   } catch (error) { errorMessage.value = messageOf(error) } finally { loading.value = false }
@@ -203,6 +233,7 @@ async function restoreSession() {
     }
   }
   startLeaseHeartbeat()
+  startRoomMembersMonitor()
   startSessionMonitor()
 }
 
@@ -230,6 +261,7 @@ async function joinRoom(room: Room) {
       networkStatus.value = await connectDesktopVpn(lease)
     }
     startLeaseHeartbeat()
+    startRoomMembersMonitor()
     notice.value = '已进入房间'
     await loadRooms()
   } catch (error) {
@@ -238,6 +270,7 @@ async function joinRoom(room: Room) {
       return
     }
     stopLeaseHeartbeat()
+    stopRoomMembersMonitor()
     if (lease) {
       try { await desktop()?.disconnectVpn(lease.username) } catch { /* connection setup may be incomplete */ }
     }
@@ -252,6 +285,7 @@ async function releaseActiveLease() {
   const lease = activeLease.value
   if (!lease) return
   stopLeaseHeartbeat()
+  stopRoomMembersMonitor()
   let cleanupError: unknown
   try { await desktop()?.disconnectVpn(lease.username) } catch (error) { cleanupError = error }
   try {
@@ -350,6 +384,7 @@ async function logout() {
   } finally {
     stopLeaseHeartbeat()
     stopSessionMonitor()
+    stopRoomMembersMonitor()
     user.value = null
     networkStatus.value = null
     clearToken()
@@ -368,6 +403,7 @@ onMounted(refreshDesktopStatus)
 onBeforeUnmount(() => {
   stopLeaseHeartbeat()
   stopSessionMonitor()
+  stopRoomMembersMonitor()
 })
 </script>
 
@@ -415,9 +451,12 @@ onBeforeUnmount(() => {
         <div class="connection-actions"><span class="secure"><ShieldCheck :size="17" /> 虚拟 IP：{{ virtualIpLabel }}</span><button v-if="activeLease" class="secondary-button" title="复制联机诊断" @click="copyDiagnostics"><ClipboardCopy :size="17" /> 复制诊断</button><button class="primary-button launch" @click="launchGame" :disabled="!activeLease || !networkStatus?.connected"><Play :size="17" /> 启动 WE8</button><button v-if="activeLease" class="secondary-button" @click="leaveRoom" :disabled="loading">退出房间</button></div>
       </section>
 
-      <section class="room-section"><div class="section-heading"><h3>可用房间</h3><button class="icon-button" title="刷新房间" @click="loadRooms" :disabled="loading"><RefreshCw :size="18" :class="{ spinning: loading }" /></button></div>
-        <div class="room-grid"><article v-for="room in rooms" :key="room.id" class="room-card" :class="{ unavailable: room.status !== 'open' }"><div class="room-card-top"><span class="region">{{ room.region }}</span><span :class="['room-state', room.status]">{{ room.status === 'open' ? '可进入' : '维护中' }}</span></div><h3>{{ room.name }}</h3><p>{{ room.subnet_cidr }}</p><div class="room-card-footer"><span><Users :size="16" /> {{ room.members }} / {{ room.capacity }}</span><button class="join-button" :disabled="loading || room.status !== 'open' || Boolean(activeLease) || (desktop() && !desktopStatus?.ready)" @click="joinRoom(room)">进入</button></div></article></div>
-      </section>
+      <div class="room-workspace">
+        <section class="room-section"><div class="section-heading"><h3>可用房间</h3><button class="icon-button" title="刷新房间" @click="loadRooms" :disabled="loading"><RefreshCw :size="18" :class="{ spinning: loading }" /></button></div>
+          <div class="room-grid"><article v-for="room in rooms" :key="room.id" class="room-card" :class="{ unavailable: room.status !== 'open' }"><div class="room-card-top"><span class="region">{{ room.region }}</span><span :class="['room-state', room.status]">{{ room.status === 'open' ? '可进入' : '维护中' }}</span></div><h3>{{ room.name }}</h3><p>{{ room.subnet_cidr }}</p><div class="room-card-footer"><span><Users :size="16" /> {{ room.members }} / {{ room.capacity }}</span><button class="join-button" :disabled="loading || room.status !== 'open' || Boolean(activeLease) || (desktop() && !desktopStatus?.ready)" @click="joinRoom(room)">进入</button></div></article></div>
+        </section>
+        <aside v-if="activeLease" class="room-members-panel"><div class="section-heading"><div><p class="eyebrow">{{ roomInfoTitle }}</p><h3>房间成员</h3></div><span class="member-count">{{ roomMembers.length }} 人</span></div><div v-if="roomMembers.length" class="member-list"><div v-for="member in roomMembers" :key="member.user_id" class="member-row"><span class="member-avatar">{{ member.nickname.slice(0, 1) }}</span><span><strong>{{ member.nickname }}</strong><small>@{{ member.username }}</small></span><em v-if="member.is_self">我</em></div></div><p v-else class="member-empty">正在读取房间成员...</p></aside>
+      </div>
 
     </section>
   </main>

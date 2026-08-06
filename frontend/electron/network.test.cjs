@@ -1,6 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { analyzeNetwork, buildVpnPriorityScript, findRoomAddress, isIPv4InCIDR, parseAdapterOutput } = require('./network.cjs')
+const { analyzeNetwork, buildVpnPriorityScript, findRoomAddress, isIPv4InCIDR, parseAdapterOutput, parseNetshInterfaces } = require('./network.cjs')
 
 test('matches only addresses in the room subnet', () => {
   assert.equal(isIPv4InCIDR('10.80.3.10', '10.80.3.0/24'), true)
@@ -30,13 +30,19 @@ test('reports stale gateway and enabled conflicting adapters', () => {
       ipAddresses: ['10.0.0.2'], subnets: ['255.255.255.0'],
       defaultGateways: [], dnsServers: [],
     },
+    {
+      description: 'Gateway NC Adapter', ipEnabled: true,
+      interfaceIndex: 20, interfaceMetric: 5,
+      ipAddresses: ['192.168.88.2'], subnets: ['255.255.255.0'],
+      defaultGateways: [], dnsServers: [],
+    },
   ])
 
   assert.equal(status.connected, true)
   assert.equal(status.actualIp, '10.80.3.11')
   assert.equal(status.interfaceIndex, 18)
   assert.equal(status.interfaceMetric, 25)
-  assert.deepEqual(status.conflictingAdapters, ['TAP-Windows Adapter V9'])
+  assert.deepEqual(status.conflictingAdapters, ['TAP-Windows Adapter V9', 'Gateway NC Adapter'])
   assert.equal(status.warnings.length, 4)
 })
 
@@ -49,6 +55,14 @@ test('parses base64 encoded PowerShell adapter fields', () => {
   assert.equal(adapters[0].interfaceIndex, 18)
   assert.equal(adapters[0].interfaceMetric, 25)
   assert.deepEqual(adapters[0].defaultGateways, [])
+})
+
+test('parses interface index and metric from localized netsh output', () => {
+  const output = `Idx     Met         MTU          状态                名称\r\n---  ----------  ----------  ------------  ---------------------------\r\n 37           5        1500  connected     VPN - VPN Client\r\n  6          35        1500  connected     WLAN\r\n`
+  assert.deepEqual(parseNetshInterfaces(output), [
+    { interfaceIndex: 37, interfaceMetric: 5, name: 'VPN - VPN Client' },
+    { interfaceIndex: 6, interfaceMetric: 35, name: 'WLAN' },
+  ])
 })
 
 test('builds a Win7-compatible netsh command for the room adapter', () => {

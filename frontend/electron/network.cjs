@@ -1,7 +1,7 @@
 const os = require('node:os')
 const { spawn } = require('node:child_process')
 
-const CONFLICTING_ADAPTER_PATTERN = /tap-windows|tap adapter|openvpn|zerotier|radmin vpn|hamachi|softether vpn client adapter/i
+const CONFLICTING_ADAPTER_PATTERN = /tap-windows|tap adapter|openvpn|zerotier|radmin vpn|hamachi|gateway nc adapter|softether vpn client adapter/i
 
 function decodeProcessOutput(chunks) {
   const buffer = Buffer.concat(chunks)
@@ -100,6 +100,46 @@ ${script}`
   })
 }
 
+function runProcess(file, args, timeoutMs = 5000) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(file, args, { windowsHide: true })
+    const stdout = []
+    const stderr = []
+    const timer = setTimeout(() => {
+      child.kill()
+      reject(new Error(`执行 ${file} 超时`))
+    }, timeoutMs)
+    child.stdout.on('data', (chunk) => { stdout.push(chunk) })
+    child.stderr.on('data', (chunk) => { stderr.push(chunk) })
+    child.once('error', (error) => {
+      clearTimeout(timer)
+      reject(error)
+    })
+    child.once('close', (code) => {
+      clearTimeout(timer)
+      const stdoutText = decodeProcessOutput(stdout)
+      const stderrText = decodeProcessOutput(stderr)
+      if (code === 0) resolve(stdoutText)
+      else reject(new Error(stderrText.trim() || `${file} 退出代码 ${code}`))
+    })
+  })
+}
+
+function parseNetshInterfaces(output) {
+  return String(output || '').split(/\r?\n/).map((line) => {
+    const match = line.match(/^\s*(\d+)\s+(\d+)\s+\d+\s+\S+\s+(.+?)\s*$/)
+    if (!match) return null
+    return { interfaceIndex: Number(match[1]), interfaceMetric: Number(match[2]), name: match[3] }
+  }).filter(Boolean)
+}
+
+async function queryNetshInterface(name) {
+  if (process.platform !== 'win32' || !name) return null
+  const netsh = `${process.env.SystemRoot || 'C:\\Windows'}\\System32\\netsh.exe`
+  const interfaces = parseNetshInterfaces(await runProcess(netsh, ['interface', 'ipv4', 'show', 'interfaces']))
+  return interfaces.find((item) => item.name.localeCompare(name, undefined, { sensitivity: 'accent' }) === 0) || null
+}
+
 async function queryWindowsAdapters() {
   if (process.platform !== 'win32') return []
   const script = `
@@ -169,7 +209,20 @@ async function inspectVpnNetwork(cidr) {
   } catch {
     // The actual room IP is still reliable when WMI is unavailable.
   }
-  return analyzeNetwork(cidr, roomAddress, adapters)
+  const network = analyzeNetwork(cidr, roomAddress, adapters)
+  if (!roomAddress || network.interfaceIndex !== null) return network
+
+  try {
+    const fallback = await queryNetshInterface(roomAddress.name)
+    if (!fallback) return network
+    return {
+      ...network,
+      interfaceIndex: fallback.interfaceIndex,
+      interfaceMetric: fallback.interfaceMetric,
+    }
+  } catch {
+    return network
+  }
 }
 
 function buildVpnPriorityScript(interfaceIndex) {
@@ -227,6 +280,7 @@ module.exports = {
   inspectVpnNetwork,
   isIPv4InCIDR,
   parseAdapterOutput,
+  parseNetshInterfaces,
   prioritizeVpnNetwork,
   runPowerShell,
   waitForVpnNetwork,

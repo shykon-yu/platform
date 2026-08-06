@@ -5,6 +5,7 @@ const LEGACY_ACCESS_TOKEN_KEY = 'pes8.access-token'
 
 export type User = { id: number; username: string; nickname: string }
 export type Room = { id: number; code: string; name: string; region: string; subnet_cidr: string; capacity: number; members: number; status: 'open' | 'maintenance' | 'closed' }
+export type RoomMember = { user_id: number; username: string; nickname: string; is_self: boolean }
 export type Lease = { room_id: number; virtual_ip: string; username: string; password?: string; hub_name: string; subnet_cidr: string; expires_at: string; server_host: string; server_port: number }
 
 type SessionResponse = { token: string; user: User }
@@ -56,6 +57,7 @@ export const authApi = {
 
 export const roomApi = {
   list: () => request<{ rooms: Room[] }>('/rooms'),
+  members: (roomID: number) => request<{ members: RoomMember[] }>(`/rooms/${roomID}/members`),
   join: (roomID: number) => request<{ lease: Lease }>(`/rooms/${roomID}/join`, { method: 'POST' }),
   heartbeat: (roomID: number) => request<{ expires_at: string }>(`/rooms/${roomID}/heartbeat`, { method: 'POST' }),
   leave: (roomID: number) => request<{ ok: boolean }>(`/rooms/${roomID}/leave`, { method: 'POST' }),

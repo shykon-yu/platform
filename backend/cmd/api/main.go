@@ -94,6 +94,13 @@ type room struct {
 	Status     string `json:"status"`
 }
 
+type roomMember struct {
+	UserID   int64  `json:"user_id"`
+	Username string `json:"username"`
+	Nickname string `json:"nickname"`
+	IsSelf   bool   `json:"is_self"`
+}
+
 type lease struct {
 	RoomID     int64     `json:"room_id"`
 	VirtualIP  string    `json:"virtual_ip"`
@@ -175,6 +182,7 @@ func main() {
 			r.Get("/me/room-session", a.roomSession)
 			r.Get("/rooms", a.listRooms)
 			r.Get("/rooms/{roomID}", a.getRoom)
+			r.Get("/rooms/{roomID}/members", a.listRoomMembers)
 			r.Post("/rooms/{roomID}/join", a.joinRoom)
 			r.Post("/rooms/{roomID}/heartbeat", a.heartbeatRoom)
 			r.Post("/rooms/{roomID}/leave", a.leaveRoom)
@@ -660,7 +668,7 @@ func (a *app) roomSession(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]any{"lease": current})
 }
 
-const roomSelect = "SELECT r.id, r.code, r.name, r.region, r.subnet_cidr, r.capacity, r.status, COUNT(l.id) AS members FROM rooms r LEFT JOIN room_ip_leases l ON l.room_id = r.id AND l.released_at IS NULL GROUP BY r.id ORDER BY r.sort_order, r.id"
+const roomSelect = "SELECT r.id, r.code, r.name, r.region, r.subnet_cidr, r.capacity, r.status, COUNT(l.id) AS members FROM rooms r LEFT JOIN room_ip_leases l ON l.room_id = r.id AND l.released_at IS NULL AND l.credential_expires_at > CURRENT_TIMESTAMP GROUP BY r.id ORDER BY r.sort_order, r.id"
 
 func (a *app) listRooms(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.db.QueryContext(r.Context(), roomSelect)
@@ -686,7 +694,7 @@ func (a *app) getRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var item room
-	query := "SELECT r.id, r.code, r.name, r.region, r.subnet_cidr, r.capacity, r.status, COUNT(l.id) AS members FROM rooms r LEFT JOIN room_ip_leases l ON l.room_id = r.id AND l.released_at IS NULL WHERE r.id = ? GROUP BY r.id"
+	query := "SELECT r.id, r.code, r.name, r.region, r.subnet_cidr, r.capacity, r.status, COUNT(l.id) AS members FROM rooms r LEFT JOIN room_ip_leases l ON l.room_id = r.id AND l.released_at IS NULL AND l.credential_expires_at > CURRENT_TIMESTAMP WHERE r.id = ? GROUP BY r.id"
 	err := a.db.QueryRowContext(r.Context(), query, roomID).Scan(&item.ID, &item.Code, &item.Name, &item.Region, &item.SubnetCIDR, &item.Capacity, &item.Status, &item.Members)
 	if err == sql.ErrNoRows {
 		respondError(w, 404, "房间不存在")
@@ -697,6 +705,58 @@ func (a *app) getRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondJSON(w, 200, map[string]any{"room": item})
+}
+
+func (a *app) listRoomMembers(w http.ResponseWriter, r *http.Request) {
+	roomID, ok := roomIDFromRequest(w, r)
+	if !ok {
+		return
+	}
+
+	var joined bool
+	err := a.db.QueryRowContext(r.Context(), `
+		SELECT EXISTS(
+			SELECT 1
+			FROM room_ip_leases
+			WHERE room_id = ? AND user_id = ? AND session_id = ?
+				AND released_at IS NULL AND credential_expires_at > NOW()
+		)`, roomID, currentUserID(r), currentSessionID(r)).Scan(&joined)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "无法读取房间成员")
+		return
+	}
+	if !joined {
+		respondError(w, http.StatusForbidden, "请先进入该房间")
+		return
+	}
+
+	rows, err := a.db.QueryContext(r.Context(), `
+		SELECT p.id, p.username_snapshot, p.nickname_snapshot, l.user_id = ? AS is_self
+		FROM room_ip_leases l
+		INNER JOIN platform_users p ON p.id = l.user_id
+		WHERE l.room_id = ? AND l.released_at IS NULL
+			AND l.credential_expires_at > NOW() AND p.status = 'active'
+		ORDER BY l.user_id = ? DESC, p.nickname_snapshot, p.username_snapshot`, currentUserID(r), roomID, currentUserID(r))
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "无法读取房间成员")
+		return
+	}
+	defer rows.Close()
+
+	members := make([]roomMember, 0)
+	for rows.Next() {
+		var member roomMember
+		if err := rows.Scan(&member.UserID, &member.Username, &member.Nickname, &member.IsSelf); err != nil {
+			respondError(w, http.StatusInternalServerError, "无法读取房间成员")
+			return
+		}
+		members = append(members, member)
+	}
+	if err := rows.Err(); err != nil {
+		respondError(w, http.StatusInternalServerError, "无法读取房间成员")
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"members": members})
 }
 
 func sessionCurrentForUpdate(ctx context.Context, tx *sql.Tx, userID int64, sessionID string) (bool, error) {
