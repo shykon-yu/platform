@@ -35,6 +35,8 @@ type config struct {
 	softEtherMode, vpncmdPath, softEtherAdminEndpoint        string
 	softEtherAdminPassword, softEtherClientHost              string
 	softEtherClientPort                                      int
+	openVPNPortBase                                          int
+	openVPNRoomPorts                                         map[int64]int
 }
 
 type app struct {
@@ -218,6 +220,7 @@ func loadConfig() config {
 		softEtherMode: getenv("SOFTETHER_MODE", "mock"), vpncmdPath: getenv("SOFTETHER_VPNCMD_PATH", "/usr/local/bin/vpncmd"),
 		softEtherAdminEndpoint: getenv("SOFTETHER_ADMIN_ENDPOINT", "localhost:5555"), softEtherAdminPassword: getenv("SOFTETHER_ADMIN_PASSWORD", ""),
 		softEtherClientHost: softEtherClientHost, softEtherClientPort: envInt("SOFTETHER_CLIENT_PORT", 443),
+		openVPNPortBase: envInt("OPENVPN_CLIENT_PORT_BASE", 12000), openVPNRoomPorts: parseRoomPorts(getenv("OPENVPN_ROOM_PORTS", "")),
 	}
 }
 
@@ -227,6 +230,40 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return value
+}
+
+func parseRoomPorts(raw string) map[int64]int {
+	ports := make(map[int64]int)
+	for _, item := range strings.Split(raw, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		parts := strings.SplitN(item, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		roomID, err := strconv.ParseInt(strings.TrimSpace(parts[0]), 10, 64)
+		if err != nil || roomID < 1 {
+			continue
+		}
+		port, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+		if err != nil || port < 1 || port > 65535 {
+			continue
+		}
+		ports[roomID] = port
+	}
+	return ports
+}
+
+func (a *app) roomServerPort(roomID int64) int {
+	if port, ok := a.config.openVPNRoomPorts[roomID]; ok && port > 0 {
+		return port
+	}
+	if a.config.openVPNPortBase > 0 {
+		return a.config.openVPNPortBase + int(roomID)
+	}
+	return a.config.softEtherClientPort
 }
 
 func (a *app) requestLogger(next http.Handler) http.Handler {
@@ -664,7 +701,7 @@ func (a *app) roomSession(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "无法读取房间会话")
 		return
 	}
-	current.ServerHost, current.ServerPort = a.config.softEtherClientHost, a.config.softEtherClientPort
+	current.ServerHost, current.ServerPort = a.config.softEtherClientHost, a.roomServerPort(current.RoomID)
 	respondJSON(w, http.StatusOK, map[string]any{"lease": current})
 }
 
@@ -831,7 +868,7 @@ func (a *app) joinRoom(w http.ResponseWriter, r *http.Request) {
 			respondError(w, 500, "无法进入房间")
 			return
 		}
-		respondJSON(w, 200, map[string]any{"lease": lease{RoomID: roomID, VirtualIP: existingIP, Username: existingUsername, Password: password, HubName: hub, SubnetCIDR: subnet, ExpiresAt: expiresAt, ServerHost: a.config.softEtherClientHost, ServerPort: a.config.softEtherClientPort}})
+		respondJSON(w, 200, map[string]any{"lease": lease{RoomID: roomID, VirtualIP: existingIP, Username: existingUsername, Password: password, HubName: hub, SubnetCIDR: subnet, ExpiresAt: expiresAt, ServerHost: a.config.softEtherClientHost, ServerPort: a.roomServerPort(roomID)}})
 		return
 	}
 	if err != sql.ErrNoRows {
@@ -873,7 +910,7 @@ func (a *app) joinRoom(w http.ResponseWriter, r *http.Request) {
 		respondError(w, 500, "无法进入房间")
 		return
 	}
-	respondJSON(w, 200, map[string]any{"lease": lease{RoomID: roomID, VirtualIP: ip, Username: username, Password: password, HubName: hub, SubnetCIDR: subnet, ExpiresAt: expiresAt, ServerHost: a.config.softEtherClientHost, ServerPort: a.config.softEtherClientPort}})
+	respondJSON(w, 200, map[string]any{"lease": lease{RoomID: roomID, VirtualIP: ip, Username: username, Password: password, HubName: hub, SubnetCIDR: subnet, ExpiresAt: expiresAt, ServerHost: a.config.softEtherClientHost, ServerPort: a.roomServerPort(roomID)}})
 }
 
 func (a *app) heartbeatRoom(w http.ResponseWriter, r *http.Request) {
