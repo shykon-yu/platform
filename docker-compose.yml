@@ -46,14 +46,10 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-redis-dev-password}
       JWT_SECRET: ${JWT_SECRET:-local-development-secret-change-before-production}
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:1420,http://localhost:5173,http://tauri.localhost,https://tauri.localhost,tauri://localhost}
-      SOFTETHER_MODE: mock
-      SOFTETHER_CLIENT_HOST: ${SOFTETHER_CLIENT_HOST:-pending-softether-host}
-      SOFTETHER_CLIENT_PORT: ${SOFTETHER_CLIENT_PORT:-443}
+      OPENVPN_CLIENT_HOST: ${OPENVPN_CLIENT_HOST:-8.133.189.9}
+      OPENVPN_INTERNAL_SECRET: ${OPENVPN_INTERNAL_SECRET:-openvpn-local-secret-change-before-production}
       OPENVPN_CLIENT_PORT_BASE: ${OPENVPN_CLIENT_PORT_BASE:-12000}
-      OPENVPN_ROOM_PORTS: ${OPENVPN_ROOM_PORTS:-}
-      SOFTETHER_ADMIN_ENDPOINT: ${SOFTETHER_ADMIN_ENDPOINT:-localhost:5555}
-      SOFTETHER_ADMIN_PASSWORD: ${SOFTETHER_ADMIN_PASSWORD:-}
-      SOFTETHER_VPNCMD_PATH: ${SOFTETHER_VPNCMD_PATH:-/usr/local/bin/vpncmd}
+      OPENVPN_ROOM_PORTS: ${OPENVPN_ROOM_PORTS:-1:12001,2:12002,3:12003,4:12004,5:12005,6:12006}
     ports:
       - "8080:8080"
     volumes:

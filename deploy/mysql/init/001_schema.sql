@@ -38,7 +38,7 @@ CREATE TABLE room_ip_leases (
   room_id BIGINT UNSIGNED NOT NULL,
   user_id BIGINT UNSIGNED NOT NULL,
   session_id VARCHAR(43) NULL,
-  virtual_ip VARCHAR(15) NOT NULL,
+  virtual_ip VARCHAR(15) NULL,
   state ENUM('allocated', 'connected', 'released') NOT NULL DEFAULT 'allocated',
   vpn_username VARCHAR(96) NOT NULL,
   real_ip VARCHAR(45) NULL,

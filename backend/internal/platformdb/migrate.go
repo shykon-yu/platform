@@ -14,6 +14,7 @@ const (
 	vpnUsernameMigration    = "20260806_rename_legacy_vpn_username"
 	roomRealIPMigration     = "20260806_add_room_real_ip"
 	roomSubnet222Migration  = "20260809_move_rooms_to_10_222"
+	dynamicOpenVPNMigration = "20260809_dynamic_openvpn_ip"
 )
 
 var safeIdentifier = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
@@ -43,6 +44,9 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	if err := runMigration(ctx, db, roomSubnet222Migration, migrateRoomSubnet222); err != nil {
+		return err
+	}
+	if err := runMigration(ctx, db, dynamicOpenVPNMigration, migrateDynamicOpenVPNIP); err != nil {
 		return err
 	}
 	return nil
@@ -247,6 +251,21 @@ func migrateRoomSubnet222(ctx context.Context, db *sql.DB) error {
 			WHERE sort_order = ?`, subnet, start, end, room); err != nil {
 			return fmt.Errorf("update room %d subnet: %w", room, err)
 		}
+	}
+	return nil
+}
+
+func migrateDynamicOpenVPNIP(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, `
+		UPDATE room_ip_leases
+		SET virtual_ip = NULL
+		WHERE released_at IS NULL`); err != nil {
+		return fmt.Errorf("clear active room lease ips before dynamic openvpn migration: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		ALTER TABLE room_ip_leases
+		MODIFY COLUMN virtual_ip VARCHAR(15) NULL`); err != nil {
+		return fmt.Errorf("allow dynamic room lease ip assignment: %w", err)
 	}
 	return nil
 }
