@@ -11,6 +11,9 @@ const (
 	soccerIdentityMigration = "20260803_soccer_identity"
 	sixRoomsMigration       = "20260803_limit_rooms_to_six"
 	singleSessionMigration  = "20260805_single_active_session"
+	vpnUsernameMigration    = "20260806_rename_legacy_vpn_username"
+	roomRealIPMigration     = "20260806_add_room_real_ip"
+	roomSubnet222Migration  = "20260809_move_rooms_to_10_222"
 )
 
 var safeIdentifier = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
@@ -31,6 +34,15 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	if err := runMigration(ctx, db, singleSessionMigration, migrateSingleActiveSession); err != nil {
+		return err
+	}
+	if err := runMigration(ctx, db, vpnUsernameMigration, migrateVpnUsername); err != nil {
+		return err
+	}
+	if err := runMigration(ctx, db, roomRealIPMigration, migrateRoomRealIP); err != nil {
+		return err
+	}
+	if err := runMigration(ctx, db, roomSubnet222Migration, migrateRoomSubnet222); err != nil {
 		return err
 	}
 	return nil
@@ -166,12 +178,74 @@ func migrateSingleActiveSession(ctx context.Context, db *sql.DB) error {
 	}
 	if hasCredentialExpiry {
 		// Tokens issued before this migration have no session ID. Expire their leases
-		// so the normal reaper revokes the corresponding SoftEther credentials.
+		// so the normal reaper clears stale room allocations.
 		if _, err := db.ExecContext(ctx, `
 			UPDATE room_ip_leases
 			SET credential_expires_at = CURRENT_TIMESTAMP
 			WHERE session_id IS NULL`); err != nil {
 			return fmt.Errorf("expire legacy room leases: %w", err)
+		}
+	}
+	return nil
+}
+
+func migrateVpnUsername(ctx context.Context, db *sql.DB) error {
+	hasLegacyColumn, err := columnExists(ctx, db, "room_ip_leases", "softether_username")
+	if err != nil {
+		return err
+	}
+	if !hasLegacyColumn {
+		return nil
+	}
+	hasVpnColumn, err := columnExists(ctx, db, "room_ip_leases", "vpn_username")
+	if err != nil {
+		return err
+	}
+	if hasVpnColumn {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, `
+		ALTER TABLE room_ip_leases
+		CHANGE COLUMN softether_username vpn_username VARCHAR(96) NOT NULL`); err != nil {
+		return fmt.Errorf("rename room lease username column: %w", err)
+	}
+	return nil
+}
+
+func migrateRoomRealIP(ctx context.Context, db *sql.DB) error {
+	hasColumn, err := columnExists(ctx, db, "room_ip_leases", "real_ip")
+	if err != nil {
+		return err
+	}
+	if hasColumn {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, `
+		ALTER TABLE room_ip_leases
+		ADD COLUMN real_ip VARCHAR(45) NULL AFTER vpn_username`); err != nil {
+		return fmt.Errorf("add room lease real ip column: %w", err)
+	}
+	return nil
+}
+
+func migrateRoomSubnet222(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, `
+		DELETE FROM room_ip_leases
+		WHERE room_id IN (
+			SELECT id FROM rooms WHERE sort_order BETWEEN 1 AND 6
+		)`); err != nil {
+		return fmt.Errorf("clear legacy room leases before subnet move: %w", err)
+	}
+
+	for room := 1; room <= 6; room++ {
+		subnet := fmt.Sprintf("10.222.%d.0/24", room)
+		start := fmt.Sprintf("10.222.%d.10", room)
+		end := fmt.Sprintf("10.222.%d.109", room)
+		if _, err := db.ExecContext(ctx, `
+			UPDATE rooms
+			SET subnet_cidr = ?, ip_start = ?, ip_end = ?
+			WHERE sort_order = ?`, subnet, start, end, room); err != nil {
+			return fmt.Errorf("update room %d subnet: %w", room, err)
 		}
 	}
 	return nil

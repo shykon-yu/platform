@@ -40,7 +40,8 @@ CREATE TABLE room_ip_leases (
   session_id VARCHAR(43) NULL,
   virtual_ip VARCHAR(15) NOT NULL,
   state ENUM('allocated', 'connected', 'released') NOT NULL DEFAULT 'allocated',
-  softether_username VARCHAR(96) NOT NULL,
+  vpn_username VARCHAR(96) NOT NULL,
+  real_ip VARCHAR(45) NULL,
   credential_expires_at DATETIME NOT NULL,
   released_at DATETIME NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -55,9 +56,9 @@ CREATE TABLE room_ip_leases (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 INSERT INTO rooms (code, name, region, hub_name, subnet_cidr, ip_start, ip_end, capacity, sort_order) VALUES
-  ('room-01', '对战房间 01', '主节点', 'we8-room-01', '10.80.1.0/24', '10.80.1.10', '10.80.1.109', 100, 1),
-  ('room-02', '对战房间 02', '主节点', 'we8-room-02', '10.80.2.0/24', '10.80.2.10', '10.80.2.109', 100, 2),
-  ('room-03', '对战房间 03', '主节点', 'we8-room-03', '10.80.3.0/24', '10.80.3.10', '10.80.3.109', 100, 3),
-  ('room-04', '对战房间 04', '主节点', 'we8-room-04', '10.80.4.0/24', '10.80.4.10', '10.80.4.109', 100, 4),
-  ('room-05', '对战房间 05', '主节点', 'we8-room-05', '10.80.5.0/24', '10.80.5.10', '10.80.5.109', 100, 5),
-  ('room-06', '对战房间 06', '主节点', 'we8-room-06', '10.80.6.0/24', '10.80.6.10', '10.80.6.109', 100, 6);
+  ('room-01', '对战房间 01', '主节点', 'we8-room-01', '10.222.1.0/24', '10.222.1.10', '10.222.1.109', 100, 1),
+  ('room-02', '对战房间 02', '主节点', 'we8-room-02', '10.222.2.0/24', '10.222.2.10', '10.222.2.109', 100, 2),
+  ('room-03', '对战房间 03', '主节点', 'we8-room-03', '10.222.3.0/24', '10.222.3.10', '10.222.3.109', 100, 3),
+  ('room-04', '对战房间 04', '主节点', 'we8-room-04', '10.222.4.0/24', '10.222.4.10', '10.222.4.109', 100, 4),
+  ('room-05', '对战房间 05', '主节点', 'we8-room-05', '10.222.5.0/24', '10.222.5.10', '10.222.5.109', 100, 5),
+  ('room-06', '对战房间 06', '主节点', 'we8-room-06', '10.222.6.0/24', '10.222.6.10', '10.222.6.109', 100, 6);
