@@ -109,6 +109,7 @@ type lease struct {
 	Password   string    `json:"password,omitempty"`
 	ExpiresAt  time.Time `json:"expires_at"`
 	SubnetCIDR string    `json:"subnet_cidr"`
+	Community  string    `json:"community"`
 	ServerHost string    `json:"server_host"`
 	ServerPort int       `json:"server_port"`
 }
@@ -210,14 +211,14 @@ func loadConfig() config {
 	for _, origin := range strings.Split(getenv("CORS_ORIGIN", defaultCORSOrigin), ",") {
 		origins[strings.TrimSpace(origin)] = true
 	}
-	openVPNClientHost := getenv("OPENVPN_CLIENT_HOST", "pending-openvpn-host")
+	openVPNClientHost := getenv("N2N_CLIENT_HOST", getenv("OPENVPN_CLIENT_HOST", "pending-n2n-host"))
 	return config{
 		port: getenv("API_PORT", "8080"), mysqlDSN: getenv("MYSQL_DSN", "pes8:pes8-dev-password@tcp(localhost:3306)/pes8_platform?parseTime=true&charset=utf8mb4&loc=Local"),
 		soccerMySQLDSN: getenv("SOCCER_MYSQL_DSN", ""),
 		redisAddr:      getenv("REDIS_ADDR", "localhost:6379"), redisPassword: getenv("REDIS_PASSWORD", "redis-dev-password"),
 		jwtSecret: getenv("JWT_SECRET", "local-development-secret-change-before-production"), jwtAudience: getenv("JWT_AUDIENCE", "we8-platform:"+openVPNClientHost), corsOrigins: origins,
 		soccerAuthURL:     getenv("SOCCER_AUTH_URL", "http://localhost/api/v1/auth/platform-login"),
-		openVPNClientHost: openVPNClientHost, openVPNInternalSecret: getenv("OPENVPN_INTERNAL_SECRET", ""), openVPNClientPortBase: envInt("OPENVPN_CLIENT_PORT_BASE", 12000), openVPNRoomPorts: parseRoomPorts(getenv("OPENVPN_ROOM_PORTS", "")),
+		openVPNClientHost: openVPNClientHost, openVPNInternalSecret: getenv("OPENVPN_INTERNAL_SECRET", ""), openVPNClientPortBase: envInt("N2N_CLIENT_PORT", envInt("N2N_CLIENT_PORT_BASE", envInt("OPENVPN_CLIENT_PORT_BASE", 25001))), openVPNRoomPorts: parseRoomPorts(getenv("N2N_ROOM_PORTS", getenv("OPENVPN_ROOM_PORTS", ""))),
 	}
 }
 
@@ -258,9 +259,9 @@ func (a *app) roomServerPort(roomID int64) int {
 		return port
 	}
 	if a.config.openVPNClientPortBase > 0 {
-		return a.config.openVPNClientPortBase + int(roomID)
+		return a.config.openVPNClientPortBase
 	}
-	return 12000 + int(roomID)
+	return 25001
 }
 
 func (a *app) requestLogger(next http.Handler) http.Handler {
@@ -722,12 +723,21 @@ func (a *app) me(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]any{"user": u})
 }
 func (a *app) roomSession(w http.ResponseWriter, r *http.Request) {
+	tx, err := a.db.BeginTx(r.Context(), &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "无法读取房间会话")
+		return
+	}
+	defer tx.Rollback()
+
+	current := lease{}
 	var (
-		current   lease
-		virtualIP sql.NullString
+		virtualIP      sql.NullString
+		code           string
+		ipStart, ipEnd string
 	)
-	query := "SELECT l.room_id, l.virtual_ip, l.vpn_username, r.subnet_cidr, l.credential_expires_at FROM room_ip_leases l INNER JOIN rooms r ON r.id = l.room_id WHERE l.user_id = ? AND l.session_id = ? AND l.released_at IS NULL ORDER BY l.id DESC LIMIT 1"
-	err := a.db.QueryRowContext(r.Context(), query, currentUserID(r), currentSessionID(r)).Scan(&current.RoomID, &virtualIP, &current.Username, &current.SubnetCIDR, &current.ExpiresAt)
+	query := "SELECT l.room_id, l.virtual_ip, l.vpn_username, r.subnet_cidr, r.code, r.ip_start, r.ip_end, l.credential_expires_at FROM room_ip_leases l INNER JOIN rooms r ON r.id = l.room_id WHERE l.user_id = ? AND l.session_id = ? AND l.released_at IS NULL ORDER BY l.id DESC LIMIT 1 FOR UPDATE"
+	err = tx.QueryRowContext(r.Context(), query, currentUserID(r), currentSessionID(r)).Scan(&current.RoomID, &virtualIP, &current.Username, &current.SubnetCIDR, &code, &ipStart, &ipEnd, &current.ExpiresAt)
 	if err == sql.ErrNoRows {
 		respondJSON(w, http.StatusOK, map[string]any{"lease": nil})
 		return
@@ -737,7 +747,24 @@ func (a *app) roomSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	current.VirtualIP = nullableString(virtualIP)
+	current.Community = roomCommunity(code, current.RoomID)
 	current.ServerHost, current.ServerPort = a.config.openVPNClientHost, a.roomServerPort(current.RoomID)
+	if current.VirtualIP == "" {
+		assignedIP, assignErr := nextFreeIP(r.Context(), tx, current.RoomID, ipStart, ipEnd)
+		if assignErr != nil {
+			respondError(w, http.StatusConflict, "房间虚拟地址已耗尽")
+			return
+		}
+		if _, assignErr = tx.ExecContext(r.Context(), "UPDATE room_ip_leases SET virtual_ip = ?, state = 'connected' WHERE room_id = ? AND user_id = ? AND session_id = ? AND released_at IS NULL", assignedIP, current.RoomID, currentUserID(r), currentSessionID(r)); assignErr != nil {
+			respondError(w, http.StatusInternalServerError, "无法读取房间会话")
+			return
+		}
+		current.VirtualIP = assignedIP
+	}
+	if err := tx.Commit(); err != nil {
+		respondError(w, http.StatusInternalServerError, "无法读取房间会话")
+		return
+	}
 	respondJSON(w, http.StatusOK, map[string]any{"lease": current})
 }
 
@@ -873,9 +900,9 @@ func (a *app) joinRoom(w http.ResponseWriter, r *http.Request) {
 		respondErrorCode(w, http.StatusUnauthorized, "SESSION_REPLACED", "账号已在其他设备登录")
 		return
 	}
-	var subnet, status string
+	var code, subnet, ipStart, ipEnd, status string
 	var capacity int
-	err = tx.QueryRowContext(r.Context(), "SELECT subnet_cidr, status, capacity FROM rooms WHERE id = ? FOR UPDATE", roomID).Scan(&subnet, &status, &capacity)
+	err = tx.QueryRowContext(r.Context(), "SELECT code, subnet_cidr, ip_start, ip_end, status, capacity FROM rooms WHERE id = ? FOR UPDATE", roomID).Scan(&code, &subnet, &ipStart, &ipEnd, &status, &capacity)
 	if err == sql.ErrNoRows {
 		respondError(w, 404, "房间不存在")
 		return
@@ -892,10 +919,18 @@ func (a *app) joinRoom(w http.ResponseWriter, r *http.Request) {
 		existingIP       sql.NullString
 		existingUsername string
 	)
-	err = tx.QueryRowContext(r.Context(), "SELECT virtual_ip, vpn_username FROM room_ip_leases WHERE room_id = ? AND user_id = ? AND session_id = ? AND released_at IS NULL ORDER BY id DESC LIMIT 1", roomID, userID, currentSessionID(r)).Scan(&existingIP, &existingUsername)
+	err = tx.QueryRowContext(r.Context(), "SELECT virtual_ip, vpn_username FROM room_ip_leases WHERE room_id = ? AND user_id = ? AND session_id = ? AND released_at IS NULL ORDER BY id DESC LIMIT 1 FOR UPDATE", roomID, userID, currentSessionID(r)).Scan(&existingIP, &existingUsername)
 	if err == nil {
 		expiresAt := time.Now().Add(leaseTTL)
-		if _, updateErr := tx.ExecContext(r.Context(), "UPDATE room_ip_leases SET credential_expires_at = ?, real_ip = ? WHERE room_id = ? AND user_id = ? AND session_id = ? AND released_at IS NULL", expiresAt, requestIP, roomID, userID, currentSessionID(r)); updateErr != nil {
+		assignedIP := nullableString(existingIP)
+		if assignedIP == "" {
+			assignedIP, err = nextFreeIP(r.Context(), tx, roomID, ipStart, ipEnd)
+			if err != nil {
+				respondError(w, http.StatusConflict, "房间虚拟地址已耗尽")
+				return
+			}
+		}
+		if _, updateErr := tx.ExecContext(r.Context(), "UPDATE room_ip_leases SET virtual_ip = ?, credential_expires_at = ?, real_ip = ?, state = 'connected' WHERE room_id = ? AND user_id = ? AND session_id = ? AND released_at IS NULL", assignedIP, expiresAt, requestIP, roomID, userID, currentSessionID(r)); updateErr != nil {
 			respondError(w, 500, "无法刷新连接凭据")
 			return
 		}
@@ -903,7 +938,7 @@ func (a *app) joinRoom(w http.ResponseWriter, r *http.Request) {
 			respondError(w, 500, "无法进入房间")
 			return
 		}
-		respondJSON(w, 200, map[string]any{"lease": lease{RoomID: roomID, VirtualIP: nullableString(existingIP), Username: existingUsername, SubnetCIDR: subnet, ExpiresAt: expiresAt, ServerHost: a.config.openVPNClientHost, ServerPort: a.roomServerPort(roomID)}})
+		respondJSON(w, 200, map[string]any{"lease": lease{RoomID: roomID, VirtualIP: assignedIP, Username: existingUsername, SubnetCIDR: subnet, Community: roomCommunity(code, roomID), ExpiresAt: expiresAt, ServerHost: a.config.openVPNClientHost, ServerPort: a.roomServerPort(roomID)}})
 		return
 	}
 	if err != sql.ErrNoRows {
@@ -921,7 +956,12 @@ func (a *app) joinRoom(w http.ResponseWriter, r *http.Request) {
 	}
 	username := fmt.Sprintf("room-%d-user-%d-%d", roomID, userID, time.Now().Unix())
 	expiresAt := time.Now().Add(leaseTTL)
-	if _, err := tx.ExecContext(r.Context(), "INSERT INTO room_ip_leases (room_id, user_id, session_id, virtual_ip, vpn_username, real_ip, credential_expires_at) VALUES (?, ?, ?, NULL, ?, ?, ?)", roomID, userID, currentSessionID(r), username, requestIP, expiresAt); err != nil {
+	assignedIP, err := nextFreeIP(r.Context(), tx, roomID, ipStart, ipEnd)
+	if err != nil {
+		respondError(w, http.StatusConflict, "房间虚拟地址已耗尽")
+		return
+	}
+	if _, err := tx.ExecContext(r.Context(), "INSERT INTO room_ip_leases (room_id, user_id, session_id, virtual_ip, vpn_username, real_ip, credential_expires_at, state) VALUES (?, ?, ?, ?, ?, ?, ?, 'connected')", roomID, userID, currentSessionID(r), assignedIP, username, requestIP, expiresAt); err != nil {
 		respondError(w, 500, "无法分配虚拟地址")
 		return
 	}
@@ -929,7 +969,7 @@ func (a *app) joinRoom(w http.ResponseWriter, r *http.Request) {
 		respondError(w, 500, "无法进入房间")
 		return
 	}
-	respondJSON(w, 200, map[string]any{"lease": lease{RoomID: roomID, VirtualIP: "", Username: username, SubnetCIDR: subnet, ExpiresAt: expiresAt, ServerHost: a.config.openVPNClientHost, ServerPort: a.roomServerPort(roomID)}})
+	respondJSON(w, 200, map[string]any{"lease": lease{RoomID: roomID, VirtualIP: assignedIP, Username: username, SubnetCIDR: subnet, Community: roomCommunity(code, roomID), ExpiresAt: expiresAt, ServerHost: a.config.openVPNClientHost, ServerPort: a.roomServerPort(roomID)}})
 }
 
 func (a *app) heartbeatRoom(w http.ResponseWriter, r *http.Request) {
@@ -1126,11 +1166,13 @@ func nextFreeIP(ctx context.Context, tx *sql.Tx, roomID int64, start, end string
 	defer usedRows.Close()
 	used := map[string]bool{}
 	for usedRows.Next() {
-		var ip string
+		var ip sql.NullString
 		if err := usedRows.Scan(&ip); err != nil {
 			return "", err
 		}
-		used[ip] = true
+		if ip.Valid && ip.String != "" {
+			used[ip.String] = true
+		}
 	}
 	for current := append(net.IP(nil), from...); ; incrementIPv4(current) {
 		candidate := current.String()
@@ -1143,6 +1185,14 @@ func nextFreeIP(ctx context.Context, tx *sql.Tx, roomID int64, start, end string
 	}
 	return "", errors.New("no free ip")
 }
+
+func roomCommunity(code string, roomID int64) string {
+	if strings.TrimSpace(code) == "" {
+		return fmt.Sprintf("wel-room-%d", roomID)
+	}
+	return code
+}
+
 func incrementIPv4(ip net.IP) {
 	for index := len(ip) - 1; index >= 0; index-- {
 		ip[index]++
