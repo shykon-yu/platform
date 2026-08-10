@@ -650,8 +650,7 @@ func (a *app) syncOpenVPNLease(w http.ResponseWriter, r *http.Request) {
 				AND credential_expires_at > CURRENT_TIMESTAMP`, ip.String(), request.RoomID, request.Username)
 	} else {
 		result, err = a.db.ExecContext(r.Context(), `
-			UPDATE room_ip_leases
-			SET virtual_ip = NULL, state = 'allocated'
+			DELETE FROM room_ip_leases
 			WHERE room_id = ? AND vpn_username = ? AND released_at IS NULL`, request.RoomID, request.Username)
 	}
 	if err != nil {

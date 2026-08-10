@@ -15,6 +15,7 @@ const (
 	roomRealIPMigration     = "20260806_add_room_real_ip"
 	roomSubnet222Migration  = "20260809_move_rooms_to_10_222"
 	dynamicOpenVPNMigration = "20260809_dynamic_openvpn_ip"
+	n2nStaticIPMigration    = "20260810_n2n_static_room_ip"
 )
 
 var safeIdentifier = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
@@ -47,6 +48,9 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	if err := runMigration(ctx, db, dynamicOpenVPNMigration, migrateDynamicOpenVPNIP); err != nil {
+		return err
+	}
+	if err := runMigration(ctx, db, n2nStaticIPMigration, migrateN2NStaticRoomIP); err != nil {
 		return err
 	}
 	return nil
@@ -266,6 +270,20 @@ func migrateDynamicOpenVPNIP(ctx context.Context, db *sql.DB) error {
 		ALTER TABLE room_ip_leases
 		MODIFY COLUMN virtual_ip VARCHAR(15) NULL`); err != nil {
 		return fmt.Errorf("allow dynamic room lease ip assignment: %w", err)
+	}
+	return nil
+}
+
+func migrateN2NStaticRoomIP(ctx context.Context, db *sql.DB) error {
+	// n2n receives the room address from the API before edge starts. A lease
+	// without an address is an old OpenVPN lease and cannot safely participate.
+	if _, err := db.ExecContext(ctx, "DELETE FROM room_ip_leases WHERE virtual_ip IS NULL"); err != nil {
+		return fmt.Errorf("clear dynamic room leases before n2n static allocation: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		ALTER TABLE room_ip_leases
+		MODIFY COLUMN virtual_ip VARCHAR(15) NOT NULL`); err != nil {
+		return fmt.Errorf("require static room lease ip for n2n: %w", err)
 	}
 	return nil
 }
