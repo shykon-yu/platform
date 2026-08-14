@@ -16,6 +16,7 @@ const (
 	roomSubnet222Migration  = "20260809_move_rooms_to_10_222"
 	dynamicOpenVPNMigration = "20260809_dynamic_openvpn_ip"
 	n2nStaticIPMigration    = "20260810_n2n_static_room_ip"
+	noTapRoomsMigration     = "20260814_create_no_tap_rooms"
 )
 
 var safeIdentifier = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
@@ -52,6 +53,69 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	}
 	if err := runMigration(ctx, db, n2nStaticIPMigration, migrateN2NStaticRoomIP); err != nil {
 		return err
+	}
+	if err := runMigration(ctx, db, noTapRoomsMigration, migrateNoTapRooms); err != nil {
+		return err
+	}
+	return nil
+}
+
+func migrateNoTapRooms(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS no_tap_rooms (
+			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+			code VARCHAR(32) NOT NULL,
+			name VARCHAR(64) NOT NULL,
+			region VARCHAR(32) NOT NULL,
+			subnet_cidr VARCHAR(32) NOT NULL,
+			ip_start VARCHAR(15) NOT NULL,
+			ip_end VARCHAR(15) NOT NULL,
+			capacity SMALLINT UNSIGNED NOT NULL DEFAULT 100,
+			status ENUM('open', 'maintenance', 'closed') NOT NULL DEFAULT 'open',
+			sort_order INT NOT NULL DEFAULT 0,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			PRIMARY KEY (id),
+			UNIQUE KEY no_tap_rooms_code_unique (code)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`); err != nil {
+		return fmt.Errorf("create no-TAP rooms: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS no_tap_room_leases (
+			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+			room_id BIGINT UNSIGNED NOT NULL,
+			user_id BIGINT UNSIGNED NOT NULL,
+			session_id VARCHAR(43) NOT NULL,
+			virtual_ip VARCHAR(15) NOT NULL,
+			state ENUM('allocated', 'connected', 'released') NOT NULL DEFAULT 'connected',
+			relay_username VARCHAR(96) NOT NULL,
+			real_ip VARCHAR(45) NULL,
+			credential_expires_at DATETIME NOT NULL,
+			released_at DATETIME NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			PRIMARY KEY (id),
+			UNIQUE KEY no_tap_leases_room_ip_unique (room_id, virtual_ip),
+			UNIQUE KEY no_tap_leases_active_user (room_id, user_id),
+			CONSTRAINT no_tap_leases_room_foreign FOREIGN KEY (room_id) REFERENCES no_tap_rooms (id),
+			CONSTRAINT no_tap_leases_user_foreign FOREIGN KEY (user_id) REFERENCES platform_users (id),
+			KEY no_tap_leases_user_index (user_id),
+			KEY no_tap_leases_state_index (state)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`); err != nil {
+		return fmt.Errorf("create no-TAP leases: %w", err)
+	}
+	for index := 1; index <= 3; index++ {
+		code := fmt.Sprintf("notap-%02d", index)
+		name := fmt.Sprintf("无网卡房间 %02d", index)
+		subnet := fmt.Sprintf("10.122.%d.0/24", index)
+		start := fmt.Sprintf("10.122.%d.10", index)
+		end := fmt.Sprintf("10.122.%d.109", index)
+		if _, err := db.ExecContext(ctx, `
+			INSERT INTO no_tap_rooms (id, code, name, region, subnet_cidr, ip_start, ip_end, capacity, sort_order)
+			VALUES (?, ?, ?, '无网卡中继', ?, ?, ?, 100, ?)
+			ON DUPLICATE KEY UPDATE name = VALUES(name), subnet_cidr = VALUES(subnet_cidr), ip_start = VALUES(ip_start), ip_end = VALUES(ip_end), sort_order = VALUES(sort_order)`, index, code, name, subnet, start, end, index); err != nil {
+			return fmt.Errorf("seed no-TAP room %d: %w", index, err)
+		}
 	}
 	return nil
 }

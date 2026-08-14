@@ -35,6 +35,9 @@ type config struct {
 	openVPNInternalSecret                                    string
 	openVPNClientPortBase                                    int
 	openVPNRoomPorts                                         map[int64]int
+	noTapRelayHost                                           string
+	noTapRelayPort                                           int
+	noTapRelayToken                                          string
 }
 
 type app struct {
@@ -114,6 +117,22 @@ type lease struct {
 	ServerPort int       `json:"server_port"`
 }
 
+// noTapLease deliberately has a separate response type from the TAP lease.
+// The two clients use different data planes and must not accidentally consume
+// each other's connection metadata.
+type noTapLease struct {
+	RoomID     int64     `json:"room_id"`
+	VirtualIP  string    `json:"virtual_ip"`
+	LogicalIP  string    `json:"logical_ip"`
+	Username   string    `json:"username"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	SubnetCIDR string    `json:"subnet_cidr"`
+	Community  string    `json:"community"`
+	RelayHost  string    `json:"relay_host"`
+	RelayPort  int       `json:"relay_port"`
+	RelayToken string    `json:"relay_token"`
+}
+
 type openVPNLeaseSyncRequest struct {
 	RoomID    int64  `json:"room_id"`
 	Username  string `json:"username"`
@@ -190,6 +209,17 @@ func main() {
 			r.Post("/rooms/{roomID}/heartbeat", a.heartbeatRoom)
 			r.Post("/rooms/{roomID}/leave", a.leaveRoom)
 			r.Get("/rooms/{roomID}/events", a.roomEvents)
+			// No-TAP has a separate controller and tables. Its room IDs are
+			// intentionally independent from the TAP room IDs above.
+			r.Route("/notap", func(r chi.Router) {
+				r.Get("/me/room-session", a.noTapRoomSession)
+				r.Get("/rooms", a.listNoTapRooms)
+				r.Get("/rooms/{roomID}", a.getNoTapRoom)
+				r.Get("/rooms/{roomID}/members", a.listNoTapRoomMembers)
+				r.Post("/rooms/{roomID}/join", a.joinNoTapRoom)
+				r.Post("/rooms/{roomID}/heartbeat", a.heartbeatNoTapRoom)
+				r.Post("/rooms/{roomID}/leave", a.leaveNoTapRoom)
+			})
 		})
 	})
 	address := ":" + cfg.port
@@ -219,6 +249,7 @@ func loadConfig() config {
 		jwtSecret: getenv("JWT_SECRET", "local-development-secret-change-before-production"), jwtAudience: getenv("JWT_AUDIENCE", "we8-platform:"+openVPNClientHost), corsOrigins: origins,
 		soccerAuthURL:     getenv("SOCCER_AUTH_URL", "http://localhost/api/v1/auth/platform-login"),
 		openVPNClientHost: openVPNClientHost, openVPNInternalSecret: getenv("OPENVPN_INTERNAL_SECRET", ""), openVPNClientPortBase: envInt("N2N_CLIENT_PORT", envInt("N2N_CLIENT_PORT_BASE", envInt("OPENVPN_CLIENT_PORT_BASE", 22222))), openVPNRoomPorts: parseRoomPorts(getenv("N2N_ROOM_PORTS", getenv("OPENVPN_ROOM_PORTS", ""))),
+		noTapRelayHost: getenv("WEL_NOTAP_RELAY_HOST", openVPNClientHost), noTapRelayPort: envInt("WEL_NOTAP_RELAY_PORT", 22333), noTapRelayToken: getenv("WEL_NOTAP_RELAY_TOKEN", getenv("WEL_NOTAP_TOKEN", "")),
 	}
 }
 
@@ -521,6 +552,9 @@ func (a *app) activateSession(ctx context.Context, userID int64, sessionID strin
 	if _, err := tx.ExecContext(ctx, "DELETE FROM room_ip_leases WHERE user_id = ?", userID); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM no_tap_room_leases WHERE user_id = ?", userID); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, "UPDATE platform_users SET active_session_id = ? WHERE id = ?", sessionID, userID); err != nil {
 		return err
 	}
@@ -545,6 +579,9 @@ func (a *app) endSession(ctx context.Context, userID int64, sessionID string) er
 		return nil
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM room_ip_leases WHERE user_id = ? AND session_id = ?", userID, sessionID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM no_tap_room_leases WHERE user_id = ? AND session_id = ?", userID, sessionID); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, "UPDATE platform_users SET active_session_id = NULL WHERE id = ? AND active_session_id = ?", userID, sessionID); err != nil {
@@ -1134,6 +1171,9 @@ func (a *app) reapExpiredLeases(ctx context.Context) {
 		if affected, _ := result.RowsAffected(); affected == 0 {
 			continue
 		}
+	}
+	if _, err := a.db.ExecContext(ctx, "DELETE FROM no_tap_room_leases WHERE released_at IS NULL AND credential_expires_at <= NOW()"); err != nil {
+		a.logger.Error("delete expired no-TAP leases", "error", err)
 	}
 }
 
