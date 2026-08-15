@@ -17,6 +17,7 @@ const (
 	dynamicOpenVPNMigration = "20260809_dynamic_openvpn_ip"
 	n2nStaticIPMigration    = "20260810_n2n_static_room_ip"
 	noTapRoomsMigration     = "20260814_create_no_tap_rooms"
+	noTapICEMigration       = "20260815_add_no_tap_ice_description"
 )
 
 var safeIdentifier = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
@@ -57,6 +58,9 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	if err := runMigration(ctx, db, noTapRoomsMigration, migrateNoTapRooms); err != nil {
 		return err
 	}
+	if err := runMigration(ctx, db, noTapICEMigration, migrateNoTapICE); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -90,6 +94,8 @@ func migrateNoTapRooms(ctx context.Context, db *sql.DB) error {
 			state ENUM('allocated', 'connected', 'released') NOT NULL DEFAULT 'connected',
 			relay_username VARCHAR(96) NOT NULL,
 			real_ip VARCHAR(45) NULL,
+			ice_local_description TEXT NULL,
+			ice_updated_at DATETIME NULL,
 			credential_expires_at DATETIME NOT NULL,
 			released_at DATETIME NULL,
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -115,6 +121,28 @@ func migrateNoTapRooms(ctx context.Context, db *sql.DB) error {
 			VALUES (?, ?, ?, '无网卡中继', ?, ?, ?, 100, ?)
 			ON DUPLICATE KEY UPDATE name = VALUES(name), subnet_cidr = VALUES(subnet_cidr), ip_start = VALUES(ip_start), ip_end = VALUES(ip_end), sort_order = VALUES(sort_order)`, index, code, name, subnet, start, end, index); err != nil {
 			return fmt.Errorf("seed no-TAP room %d: %w", index, err)
+		}
+	}
+	return nil
+}
+
+func migrateNoTapICE(ctx context.Context, db *sql.DB) error {
+	column, err := columnExists(ctx, db, "no_tap_room_leases", "ice_local_description")
+	if err != nil {
+		return err
+	}
+	if !column {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE no_tap_room_leases ADD COLUMN ice_local_description TEXT NULL AFTER real_ip`); err != nil {
+			return fmt.Errorf("add no-TAP ICE description: %w", err)
+		}
+	}
+	column, err = columnExists(ctx, db, "no_tap_room_leases", "ice_updated_at")
+	if err != nil {
+		return err
+	}
+	if !column {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE no_tap_room_leases ADD COLUMN ice_updated_at DATETIME NULL AFTER ice_local_description`); err != nil {
+			return fmt.Errorf("add no-TAP ICE timestamp: %w", err)
 		}
 	}
 	return nil

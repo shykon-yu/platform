@@ -38,6 +38,8 @@ type config struct {
 	noTapRelayHost                                           string
 	noTapRelayPort                                           int
 	noTapRelayToken                                          string
+	noTapIceStunHost                                         string
+	noTapIceStunPort                                         int
 }
 
 type app struct {
@@ -97,12 +99,14 @@ type room struct {
 }
 
 type roomMember struct {
-	UserID    int64  `json:"user_id"`
-	Username  string `json:"username"`
-	Nickname  string `json:"nickname"`
-	VirtualIP string `json:"virtual_ip"`
-	RealIP    string `json:"real_ip,omitempty"`
-	IsSelf    bool   `json:"is_self"`
+	UserID         int64  `json:"user_id"`
+	Username       string `json:"username"`
+	Nickname       string `json:"nickname"`
+	VirtualIP      string `json:"virtual_ip"`
+	RealIP         string `json:"real_ip,omitempty"`
+	IsSelf         bool   `json:"is_self"`
+	IceDescription string `json:"ice_description,omitempty"`
+	IceState       string `json:"ice_state"`
 }
 
 type lease struct {
@@ -121,16 +125,18 @@ type lease struct {
 // The two clients use different data planes and must not accidentally consume
 // each other's connection metadata.
 type noTapLease struct {
-	RoomID     int64     `json:"room_id"`
-	VirtualIP  string    `json:"virtual_ip"`
-	LogicalIP  string    `json:"logical_ip"`
-	Username   string    `json:"username"`
-	ExpiresAt  time.Time `json:"expires_at"`
-	SubnetCIDR string    `json:"subnet_cidr"`
-	Community  string    `json:"community"`
-	RelayHost  string    `json:"relay_host"`
-	RelayPort  int       `json:"relay_port"`
-	RelayToken string    `json:"relay_token"`
+	RoomID      int64     `json:"room_id"`
+	VirtualIP   string    `json:"virtual_ip"`
+	LogicalIP   string    `json:"logical_ip"`
+	Username    string    `json:"username"`
+	ExpiresAt   time.Time `json:"expires_at"`
+	SubnetCIDR  string    `json:"subnet_cidr"`
+	Community   string    `json:"community"`
+	RelayHost   string    `json:"relay_host"`
+	RelayPort   int       `json:"relay_port"`
+	RelayToken  string    `json:"relay_token"`
+	IceStunHost string    `json:"ice_stun_host"`
+	IceStunPort int       `json:"ice_stun_port"`
 }
 
 type openVPNLeaseSyncRequest struct {
@@ -219,6 +225,7 @@ func main() {
 				r.Post("/rooms/{roomID}/join", a.joinNoTapRoom)
 				r.Post("/rooms/{roomID}/heartbeat", a.heartbeatNoTapRoom)
 				r.Post("/rooms/{roomID}/leave", a.leaveNoTapRoom)
+				r.Post("/rooms/{roomID}/ice", a.publishNoTapICE)
 			})
 		})
 	})
@@ -250,6 +257,7 @@ func loadConfig() config {
 		soccerAuthURL:     getenv("SOCCER_AUTH_URL", "http://localhost/api/v1/auth/platform-login"),
 		openVPNClientHost: openVPNClientHost, openVPNInternalSecret: getenv("OPENVPN_INTERNAL_SECRET", ""), openVPNClientPortBase: envInt("N2N_CLIENT_PORT", envInt("N2N_CLIENT_PORT_BASE", envInt("OPENVPN_CLIENT_PORT_BASE", 22222))), openVPNRoomPorts: parseRoomPorts(getenv("N2N_ROOM_PORTS", getenv("OPENVPN_ROOM_PORTS", ""))),
 		noTapRelayHost: getenv("WEL_NOTAP_RELAY_HOST", openVPNClientHost), noTapRelayPort: envInt("WEL_NOTAP_RELAY_PORT", 22333), noTapRelayToken: getenv("WEL_NOTAP_RELAY_TOKEN", getenv("WEL_NOTAP_TOKEN", "")),
+		noTapIceStunHost: getenv("WEL_NOTAP_ICE_STUN_HOST", "stun.l.google.com"), noTapIceStunPort: envInt("WEL_NOTAP_ICE_STUN_PORT", 19302),
 	}
 }
 

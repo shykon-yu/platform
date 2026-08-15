@@ -27,7 +27,8 @@ func (a *app) noTapLeasePayload(roomID int64, code, subnet, virtualIP, username 
 		RoomID: roomID, VirtualIP: virtualIP, LogicalIP: virtualIP, Username: username,
 		ExpiresAt: expiresAt, SubnetCIDR: subnet, Community: roomCommunity(code, roomID),
 		RelayHost: a.config.noTapRelayHost, RelayPort: a.config.noTapRelayPort,
-		RelayToken: a.config.noTapRelayToken,
+		RelayToken:  a.config.noTapRelayToken,
+		IceStunHost: a.config.noTapIceStunHost, IceStunPort: a.config.noTapIceStunPort,
 	}
 }
 
@@ -129,7 +130,9 @@ func (a *app) listNoTapRoomMembers(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := a.db.QueryContext(r.Context(), `
 		SELECT p.id, p.username_snapshot, p.nickname_snapshot, l.virtual_ip,
-			COALESCE(l.real_ip, ''), l.user_id = ?
+			COALESCE(l.real_ip, ''), l.user_id = ?,
+			COALESCE(l.ice_local_description, ''),
+			CASE WHEN l.ice_local_description IS NULL OR l.ice_local_description = '' THEN 'waiting' ELSE 'ready' END
 		FROM no_tap_room_leases l
 		INNER JOIN platform_users p ON p.id = l.user_id
 		WHERE l.room_id = ? AND l.released_at IS NULL
@@ -145,7 +148,7 @@ func (a *app) listNoTapRoomMembers(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var member roomMember
 		var virtualIP, realIP sql.NullString
-		if err := rows.Scan(&member.UserID, &member.Username, &member.Nickname, &virtualIP, &realIP, &member.IsSelf); err != nil {
+		if err := rows.Scan(&member.UserID, &member.Username, &member.Nickname, &virtualIP, &realIP, &member.IsSelf, &member.IceDescription, &member.IceState); err != nil {
 			respondError(w, http.StatusInternalServerError, "无法读取无网卡房间成员")
 			return
 		}
@@ -212,7 +215,7 @@ func (a *app) joinNoTapRoom(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		if _, err := tx.ExecContext(r.Context(), `
 			UPDATE no_tap_room_leases
-			SET credential_expires_at = ?, real_ip = ?, state = 'connected'
+			SET credential_expires_at = ?, real_ip = ?, state = 'connected', ice_local_description = NULL, ice_updated_at = NULL
 			WHERE room_id = ? AND user_id = ? AND session_id = ? AND released_at IS NULL`,
 			expiresAt, requestIP, roomID, userID, sessionID); err != nil {
 			respondError(w, http.StatusInternalServerError, "无法刷新无网卡连接凭据")
@@ -316,6 +319,43 @@ func (a *app) leaveNoTapRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+type noTapICERequest struct {
+	LocalDescription string `json:"local_description"`
+}
+
+func (a *app) publishNoTapICE(w http.ResponseWriter, r *http.Request) {
+	roomID, ok := roomIDFromRequest(w, r)
+	if !ok {
+		return
+	}
+	var request noTapICERequest
+	if !decodeJSON(w, r, &request) || len(request.LocalDescription) < 16 || len(request.LocalDescription) > 4096 {
+		respondError(w, http.StatusBadRequest, "ICE candidate 数据无效")
+		return
+	}
+	if current, err := a.isSessionCurrent(r.Context(), currentUserID(r), currentSessionID(r)); err != nil {
+		respondError(w, http.StatusServiceUnavailable, "暂时无法验证登录状态")
+		return
+	} else if !current {
+		respondErrorCode(w, http.StatusUnauthorized, "SESSION_REPLACED", "账号已在其他设备登录")
+		return
+	}
+	result, err := a.db.ExecContext(r.Context(), `
+		UPDATE no_tap_room_leases
+		SET ice_local_description = ?, ice_updated_at = UTC_TIMESTAMP()
+		WHERE room_id = ? AND user_id = ? AND session_id = ? AND released_at IS NULL
+			AND credential_expires_at > UTC_TIMESTAMP()`, request.LocalDescription, roomID, currentUserID(r), currentSessionID(r))
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "无法保存 ICE candidate")
+		return
+	}
+	if affected, _ := result.RowsAffected(); affected == 0 {
+		respondError(w, http.StatusConflict, "无网卡房间连接已结束，请重新进入")
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]string{"state": "ready"})
 }
 
 func nextFreeNoTapIP(ctx context.Context, tx *sql.Tx, roomID int64, start, end string) (string, error) {
