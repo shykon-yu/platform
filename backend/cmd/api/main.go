@@ -1172,7 +1172,7 @@ func (a *app) reapExpiredLeases(ctx context.Context) {
 			continue
 		}
 	}
-	if _, err := a.db.ExecContext(ctx, "DELETE FROM no_tap_room_leases WHERE released_at IS NULL AND credential_expires_at <= NOW()"); err != nil {
+	if _, err := a.db.ExecContext(ctx, "DELETE FROM no_tap_room_leases WHERE released_at IS NULL AND credential_expires_at <= UTC_TIMESTAMP()"); err != nil {
 		a.logger.Error("delete expired no-TAP leases", "error", err)
 	}
 }

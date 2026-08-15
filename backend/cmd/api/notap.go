@@ -18,7 +18,7 @@ const noTapRoomSelect = `
 		COUNT(l.id) AS members
 	FROM no_tap_rooms r
 	LEFT JOIN no_tap_room_leases l
-		ON l.room_id = r.id AND l.released_at IS NULL AND l.credential_expires_at > CURRENT_TIMESTAMP
+		ON l.room_id = r.id AND l.released_at IS NULL AND l.credential_expires_at > UTC_TIMESTAMP()
 	GROUP BY r.id
 	ORDER BY r.sort_order, r.id`
 
@@ -41,7 +41,7 @@ func (a *app) noTapRoomSession(w http.ResponseWriter, r *http.Request) {
 		FROM no_tap_room_leases l
 		INNER JOIN no_tap_rooms r ON r.id = l.room_id
 		WHERE l.user_id = ? AND l.session_id = ? AND l.released_at IS NULL
-			AND l.credential_expires_at > CURRENT_TIMESTAMP
+			AND l.credential_expires_at > UTC_TIMESTAMP()
 		ORDER BY l.id DESC LIMIT 1`, currentUserID(r), currentSessionID(r)).Scan(
 		&current.RoomID, &virtualIP, &username, &code, &subnet, &current.ExpiresAt)
 	if err == sql.ErrNoRows {
@@ -91,7 +91,7 @@ func (a *app) getNoTapRoom(w http.ResponseWriter, r *http.Request) {
 			COUNT(l.id) AS members
 		FROM no_tap_rooms r
 		LEFT JOIN no_tap_room_leases l
-			ON l.room_id = r.id AND l.released_at IS NULL AND l.credential_expires_at > CURRENT_TIMESTAMP
+			ON l.room_id = r.id AND l.released_at IS NULL AND l.credential_expires_at > UTC_TIMESTAMP()
 		WHERE r.id = ?
 		GROUP BY r.id`, roomID).Scan(
 		&item.ID, &item.Code, &item.Name, &item.Region, &item.SubnetCIDR, &item.Capacity,
@@ -117,7 +117,7 @@ func (a *app) listNoTapRoomMembers(w http.ResponseWriter, r *http.Request) {
 		SELECT EXISTS(
 			SELECT 1 FROM no_tap_room_leases
 			WHERE room_id = ? AND user_id = ? AND session_id = ?
-				AND released_at IS NULL AND credential_expires_at > NOW()
+				AND released_at IS NULL AND credential_expires_at > UTC_TIMESTAMP()
 		)`, roomID, currentUserID(r), currentSessionID(r)).Scan(&joined)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "无法读取无网卡房间成员")
@@ -133,7 +133,7 @@ func (a *app) listNoTapRoomMembers(w http.ResponseWriter, r *http.Request) {
 		FROM no_tap_room_leases l
 		INNER JOIN platform_users p ON p.id = l.user_id
 		WHERE l.room_id = ? AND l.released_at IS NULL
-			AND l.credential_expires_at > NOW() AND p.status = 'active'
+			AND l.credential_expires_at > UTC_TIMESTAMP() AND p.status = 'active'
 		ORDER BY l.user_id = ? DESC, p.nickname_snapshot, p.username_snapshot`,
 		currentUserID(r), roomID, currentUserID(r))
 	if err != nil {
@@ -208,7 +208,7 @@ func (a *app) joinNoTapRoom(w http.ResponseWriter, r *http.Request) {
 		SELECT virtual_ip, relay_username FROM no_tap_room_leases
 		WHERE room_id = ? AND user_id = ? AND session_id = ? AND released_at IS NULL
 		ORDER BY id DESC LIMIT 1 FOR UPDATE`, roomID, userID, sessionID).Scan(&existingIP, &existingUsername)
-	expiresAt := time.Now().Add(leaseTTL)
+	expiresAt := time.Now().UTC().Add(leaseTTL)
 	if err == nil {
 		if _, err := tx.ExecContext(r.Context(), `
 			UPDATE no_tap_room_leases
@@ -232,7 +232,7 @@ func (a *app) joinNoTapRoom(w http.ResponseWriter, r *http.Request) {
 	var members int
 	if err := tx.QueryRowContext(r.Context(), `
 		SELECT COUNT(*) FROM no_tap_room_leases
-		WHERE room_id = ? AND released_at IS NULL AND credential_expires_at > NOW()`, roomID).Scan(&members); err != nil {
+		WHERE room_id = ? AND released_at IS NULL AND credential_expires_at > UTC_TIMESTAMP()`, roomID).Scan(&members); err != nil {
 		respondError(w, http.StatusInternalServerError, "无法进入无网卡房间")
 		return
 	}
@@ -274,12 +274,12 @@ func (a *app) heartbeatNoTapRoom(w http.ResponseWriter, r *http.Request) {
 		respondErrorCode(w, http.StatusUnauthorized, "SESSION_REPLACED", "账号已在其他设备登录")
 		return
 	}
-	expiresAt := time.Now().Add(leaseTTL)
+	expiresAt := time.Now().UTC().Add(leaseTTL)
 	result, err := a.db.ExecContext(r.Context(), `
 		UPDATE no_tap_room_leases
 		SET credential_expires_at = ?, real_ip = ?
 		WHERE room_id = ? AND user_id = ? AND session_id = ? AND released_at IS NULL
-			AND credential_expires_at > CURRENT_TIMESTAMP`, expiresAt, clientIP(r), roomID, userID, sessionID)
+			AND credential_expires_at > UTC_TIMESTAMP()`, expiresAt, clientIP(r), roomID, userID, sessionID)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "无法续期无网卡连接")
 		return
