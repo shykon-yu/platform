@@ -329,7 +329,7 @@ type noTapICERequest struct {
 	LocalDescription string `json:"local_description"`
 }
 
-const noTapPeerProbeTTL = 45 * time.Second
+const noTapPeerProbeTTL = 60 * time.Second
 
 type noTapPeerProbeRequest struct {
 	TargetUserID     int64  `json:"target_user_id"`
@@ -400,6 +400,17 @@ func (a *app) createNoTapPeerProbe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A second click for the same target supersedes an unfinished probe. Keeping
+	// stale rows here can fill the target's polling window in a busy room.
+	if _, err := a.db.ExecContext(r.Context(), `
+		DELETE FROM no_tap_peer_probes
+		WHERE room_id = ? AND requester_user_id = ? AND target_user_id = ?
+			AND target_description IS NULL`,
+		roomID, currentUserID(r), request.TargetUserID); err != nil {
+		respondError(w, http.StatusInternalServerError, "无法清理旧的直连探测")
+		return
+	}
+
 	expiresAt := time.Now().UTC().Add(noTapPeerProbeTTL)
 	result, err := a.db.ExecContext(r.Context(), `
 		INSERT INTO no_tap_peer_probes
@@ -429,7 +440,7 @@ func (a *app) listIncomingNoTapPeerProbes(w http.ResponseWriter, r *http.Request
 		FROM no_tap_peer_probes
 		WHERE room_id = ? AND target_user_id = ? AND target_description IS NULL
 			AND expires_at > UTC_TIMESTAMP()
-		ORDER BY id ASC LIMIT 12`, roomID, currentUserID(r))
+		ORDER BY id DESC LIMIT 32`, roomID, currentUserID(r))
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "无法读取直连探测")
 		return
