@@ -18,6 +18,7 @@ const (
 	n2nStaticIPMigration    = "20260810_n2n_static_room_ip"
 	noTapRoomsMigration     = "20260814_create_no_tap_rooms"
 	noTapICEMigration       = "20260815_add_no_tap_ice_description"
+	noTapRoomNamesMigration = "20260816_rename_no_tap_room_labels"
 )
 
 var safeIdentifier = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
@@ -59,6 +60,9 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	if err := runMigration(ctx, db, noTapICEMigration, migrateNoTapICE); err != nil {
+		return err
+	}
+	if err := runMigration(ctx, db, noTapRoomNamesMigration, migrateNoTapRoomNames); err != nil {
 		return err
 	}
 	return nil
@@ -112,16 +116,26 @@ func migrateNoTapRooms(ctx context.Context, db *sql.DB) error {
 	}
 	for index := 1; index <= 3; index++ {
 		code := fmt.Sprintf("notap-%02d", index)
-		name := fmt.Sprintf("无网卡房间 %02d", index)
+		name := fmt.Sprintf("房间 %02d", index)
 		subnet := fmt.Sprintf("10.122.%d.0/24", index)
 		start := fmt.Sprintf("10.122.%d.10", index)
 		end := fmt.Sprintf("10.122.%d.109", index)
 		if _, err := db.ExecContext(ctx, `
 			INSERT INTO no_tap_rooms (id, code, name, region, subnet_cidr, ip_start, ip_end, capacity, sort_order)
-			VALUES (?, ?, ?, '无网卡中继', ?, ?, ?, 100, ?)
-			ON DUPLICATE KEY UPDATE name = VALUES(name), subnet_cidr = VALUES(subnet_cidr), ip_start = VALUES(ip_start), ip_end = VALUES(ip_end), sort_order = VALUES(sort_order)`, index, code, name, subnet, start, end, index); err != nil {
+			VALUES (?, ?, ?, '云中继', ?, ?, ?, 100, ?)
+			ON DUPLICATE KEY UPDATE name = VALUES(name), region = VALUES(region), subnet_cidr = VALUES(subnet_cidr), ip_start = VALUES(ip_start), ip_end = VALUES(ip_end), sort_order = VALUES(sort_order)`, index, code, name, subnet, start, end, index); err != nil {
 			return fmt.Errorf("seed no-TAP room %d: %w", index, err)
 		}
+	}
+	return nil
+}
+
+func migrateNoTapRoomNames(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, `
+		UPDATE no_tap_rooms
+		SET name = CONCAT('房间 ', LPAD(id, 2, '0')), region = '云中继'
+		WHERE id BETWEEN 1 AND 3`); err != nil {
+		return fmt.Errorf("rename no-TAP room labels: %w", err)
 	}
 	return nil
 }
