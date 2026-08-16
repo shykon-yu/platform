@@ -35,7 +35,7 @@ func TestMigrateLegacySchema(t *testing.T) {
 
 	statements := []string{
 		"SET FOREIGN_KEY_CHECKS = 0",
-		"DROP TABLE IF EXISTS no_tap_room_leases, no_tap_rooms, room_ip_leases, rooms, platform_users, users, platform_schema_migrations",
+		"DROP TABLE IF EXISTS no_tap_peer_probes, no_tap_room_leases, no_tap_rooms, room_ip_leases, rooms, platform_users, users, platform_schema_migrations",
 		"SET FOREIGN_KEY_CHECKS = 1",
 		`CREATE TABLE users (
 			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -153,5 +153,19 @@ func TestMigrateLegacySchema(t *testing.T) {
 	}
 	if roomCount != 3 {
 		t.Fatalf("No-TAP room count = %d, want 3", roomCount)
+	}
+
+	for _, item := range []struct{ table, column string }{
+		{"no_tap_peer_probes", "requester_description"},
+		{"no_tap_peer_probes", "target_description"},
+	} {
+		table, column := item.table, item.column
+		exists, err := columnExists(ctx, db, table, column)
+		if err != nil {
+			t.Fatalf("check %s.%s: %v", table, column, err)
+		}
+		if !exists {
+			t.Fatalf("migration did not add %s.%s", table, column)
+		}
 	}
 }

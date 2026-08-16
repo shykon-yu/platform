@@ -19,6 +19,7 @@ const (
 	noTapRoomsMigration     = "20260814_create_no_tap_rooms"
 	noTapICEMigration       = "20260815_add_no_tap_ice_description"
 	noTapRoomNamesMigration = "20260816_rename_no_tap_room_labels"
+	noTapPeerProbeMigration = "20260816_add_no_tap_peer_probes"
 )
 
 var safeIdentifier = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
@@ -63,6 +64,9 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	if err := runMigration(ctx, db, noTapRoomNamesMigration, migrateNoTapRoomNames); err != nil {
+		return err
+	}
+	if err := runMigration(ctx, db, noTapPeerProbeMigration, migrateNoTapPeerProbes); err != nil {
 		return err
 	}
 	return nil
@@ -158,6 +162,33 @@ func migrateNoTapICE(ctx context.Context, db *sql.DB) error {
 		if _, err := db.ExecContext(ctx, `ALTER TABLE no_tap_room_leases ADD COLUMN ice_updated_at DATETIME NULL AFTER ice_local_description`); err != nil {
 			return fmt.Errorf("add no-TAP ICE timestamp: %w", err)
 		}
+	}
+	return nil
+}
+
+// Peer probes exchange short-lived, pair-specific ICE descriptions. They are
+// intentionally separate from the room-level game candidate so inspecting a
+// member's latency can never replace the active game's remote ICE peer.
+func migrateNoTapPeerProbes(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS no_tap_peer_probes (
+			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+			room_id BIGINT UNSIGNED NOT NULL,
+			requester_user_id BIGINT UNSIGNED NOT NULL,
+			target_user_id BIGINT UNSIGNED NOT NULL,
+			requester_description TEXT NOT NULL,
+			target_description TEXT NULL,
+			expires_at DATETIME NOT NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			PRIMARY KEY (id),
+			KEY no_tap_peer_probes_target_index (room_id, target_user_id, expires_at),
+			KEY no_tap_peer_probes_requester_index (room_id, requester_user_id, expires_at),
+			CONSTRAINT no_tap_peer_probes_room_foreign FOREIGN KEY (room_id) REFERENCES no_tap_rooms (id),
+			CONSTRAINT no_tap_peer_probes_requester_foreign FOREIGN KEY (requester_user_id) REFERENCES platform_users (id),
+			CONSTRAINT no_tap_peer_probes_target_foreign FOREIGN KEY (target_user_id) REFERENCES platform_users (id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`); err != nil {
+		return fmt.Errorf("create no-TAP peer probes: %w", err)
 	}
 	return nil
 }

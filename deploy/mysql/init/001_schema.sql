@@ -102,6 +102,24 @@ CREATE TABLE no_tap_room_leases (
   KEY no_tap_leases_state_index (state)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE no_tap_peer_probes (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  room_id BIGINT UNSIGNED NOT NULL,
+  requester_user_id BIGINT UNSIGNED NOT NULL,
+  target_user_id BIGINT UNSIGNED NOT NULL,
+  requester_description TEXT NOT NULL,
+  target_description TEXT NULL,
+  expires_at DATETIME NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY no_tap_peer_probes_target_index (room_id, target_user_id, expires_at),
+  KEY no_tap_peer_probes_requester_index (room_id, requester_user_id, expires_at),
+  CONSTRAINT no_tap_peer_probes_room_foreign FOREIGN KEY (room_id) REFERENCES no_tap_rooms (id),
+  CONSTRAINT no_tap_peer_probes_requester_foreign FOREIGN KEY (requester_user_id) REFERENCES platform_users (id),
+  CONSTRAINT no_tap_peer_probes_target_foreign FOREIGN KEY (target_user_id) REFERENCES platform_users (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 INSERT INTO no_tap_rooms (id, code, name, region, subnet_cidr, ip_start, ip_end, capacity, sort_order) VALUES
   (1, 'notap-01', '房间 01', '云中继', '10.122.1.0/24', '10.122.1.10', '10.122.1.109', 100, 1),
   (2, 'notap-02', '房间 02', '云中继', '10.122.2.0/24', '10.122.2.10', '10.122.2.109', 100, 2),

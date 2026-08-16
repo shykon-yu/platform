@@ -139,6 +139,15 @@ type noTapLease struct {
 	IceStunPort int       `json:"ice_stun_port"`
 }
 
+type noTapPeerProbe struct {
+	ID                   int64     `json:"id"`
+	RequesterUserID      int64     `json:"requester_user_id"`
+	TargetUserID         int64     `json:"target_user_id"`
+	RequesterDescription string    `json:"requester_description,omitempty"`
+	TargetDescription    string    `json:"target_description,omitempty"`
+	ExpiresAt            time.Time `json:"expires_at"`
+}
+
 type openVPNLeaseSyncRequest struct {
 	RoomID    int64  `json:"room_id"`
 	Username  string `json:"username"`
@@ -226,6 +235,10 @@ func main() {
 				r.Post("/rooms/{roomID}/heartbeat", a.heartbeatNoTapRoom)
 				r.Post("/rooms/{roomID}/leave", a.leaveNoTapRoom)
 				r.Post("/rooms/{roomID}/ice", a.publishNoTapICE)
+				r.Get("/rooms/{roomID}/peer-probes/incoming", a.listIncomingNoTapPeerProbes)
+				r.Post("/rooms/{roomID}/peer-probes", a.createNoTapPeerProbe)
+				r.Get("/rooms/{roomID}/peer-probes/{probeID}", a.getNoTapPeerProbe)
+				r.Post("/rooms/{roomID}/peer-probes/{probeID}/answer", a.answerNoTapPeerProbe)
 			})
 		})
 	})
