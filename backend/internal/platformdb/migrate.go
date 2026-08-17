@@ -21,6 +21,7 @@ const (
 	noTapRoomNamesMigration = "20260816_rename_no_tap_room_labels"
 	noTapPeerProbeMigration = "20260816_add_no_tap_peer_probes"
 	noTapGameProbeMigration = "20260817_add_no_tap_game_probe_fields"
+	noTapRoomModesMigration = "20260818_add_no_tap_room_modes"
 )
 
 var safeIdentifier = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
@@ -73,6 +74,9 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	if err := runMigration(ctx, db, noTapGameProbeMigration, migrateNoTapGameProbeFields); err != nil {
 		return err
 	}
+	if err := runMigration(ctx, db, noTapRoomModesMigration, migrateNoTapRoomModes); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -83,6 +87,7 @@ func migrateNoTapRooms(ctx context.Context, db *sql.DB) error {
 			code VARCHAR(32) NOT NULL,
 			name VARCHAR(64) NOT NULL,
 			region VARCHAR(32) NOT NULL,
+			connection_mode ENUM('direct', 'relay') NOT NULL DEFAULT 'direct',
 			subnet_cidr VARCHAR(32) NOT NULL,
 			ip_start VARCHAR(15) NOT NULL,
 			ip_end VARCHAR(15) NOT NULL,
@@ -122,18 +127,42 @@ func migrateNoTapRooms(ctx context.Context, db *sql.DB) error {
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`); err != nil {
 		return fmt.Errorf("create no-TAP leases: %w", err)
 	}
-	for index := 1; index <= 3; index++ {
+	for index := 1; index <= 4; index++ {
 		code := fmt.Sprintf("notap-%02d", index)
 		name := fmt.Sprintf("房间 %02d", index)
+		region := "中继"
+		if index <= 2 {
+			region = "直连"
+		}
 		subnet := fmt.Sprintf("10.122.%d.0/24", index)
 		start := fmt.Sprintf("10.122.%d.10", index)
 		end := fmt.Sprintf("10.122.%d.109", index)
 		if _, err := db.ExecContext(ctx, `
 			INSERT INTO no_tap_rooms (id, code, name, region, subnet_cidr, ip_start, ip_end, capacity, sort_order)
-			VALUES (?, ?, ?, '云中继', ?, ?, ?, 100, ?)
-			ON DUPLICATE KEY UPDATE name = VALUES(name), region = VALUES(region), subnet_cidr = VALUES(subnet_cidr), ip_start = VALUES(ip_start), ip_end = VALUES(ip_end), sort_order = VALUES(sort_order)`, index, code, name, subnet, start, end, index); err != nil {
+			VALUES (?, ?, ?, ?, ?, ?, ?, 100, ?)
+			ON DUPLICATE KEY UPDATE name = VALUES(name), region = VALUES(region), subnet_cidr = VALUES(subnet_cidr), ip_start = VALUES(ip_start), ip_end = VALUES(ip_end), sort_order = VALUES(sort_order)`, index, code, name, region, subnet, start, end, index); err != nil {
 			return fmt.Errorf("seed no-TAP room %d: %w", index, err)
 		}
+	}
+	return nil
+}
+
+func migrateNoTapRoomModes(ctx context.Context, db *sql.DB) error {
+	column, err := columnExists(ctx, db, "no_tap_rooms", "connection_mode")
+	if err != nil {
+		return err
+	}
+	if !column {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE no_tap_rooms ADD COLUMN connection_mode ENUM('direct', 'relay') NOT NULL DEFAULT 'direct' AFTER region`); err != nil {
+			return fmt.Errorf("add no-TAP room mode: %w", err)
+		}
+	}
+	if _, err := db.ExecContext(ctx, `
+		UPDATE no_tap_rooms
+		SET connection_mode = CASE WHEN id IN (1, 2) THEN 'direct' ELSE 'relay' END,
+			region = CASE WHEN id IN (1, 2) THEN '直连' ELSE '中继' END
+		WHERE id BETWEEN 1 AND 4`); err != nil {
+		return fmt.Errorf("seed no-TAP room modes: %w", err)
 	}
 	return nil
 }
@@ -141,8 +170,8 @@ func migrateNoTapRooms(ctx context.Context, db *sql.DB) error {
 func migrateNoTapRoomNames(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, `
 		UPDATE no_tap_rooms
-		SET name = CONCAT('房间 ', LPAD(id, 2, '0')), region = '云中继'
-		WHERE id BETWEEN 1 AND 3`); err != nil {
+		SET name = CONCAT('房间 ', LPAD(id, 2, '0')), region = CASE WHEN id IN (1, 2) THEN '直连' ELSE '中继' END
+		WHERE id BETWEEN 1 AND 4`); err != nil {
 		return fmt.Errorf("rename no-TAP room labels: %w", err)
 	}
 	return nil

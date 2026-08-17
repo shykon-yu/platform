@@ -14,13 +14,16 @@ func TestNoTapLeasePayloadUsesDedicatedRelay(t *testing.T) {
 	}}
 	expiresAt := time.Now().Add(30 * time.Minute).Truncate(time.Second)
 
-	got := a.noTapLeasePayload(2, "notap-02", "10.122.2.0/24", "10.122.2.10", "relay-user", expiresAt)
+	got := a.noTapLeasePayload(2, "notap-02", "10.122.2.0/24", "10.122.2.10", "relay-user", "direct", expiresAt)
 
 	if got.RoomID != 2 || got.VirtualIP != "10.122.2.10" || got.LogicalIP != got.VirtualIP {
 		t.Fatalf("No-TAP address payload = %#v", got)
 	}
 	if got.SubnetCIDR != "10.122.2.0/24" || got.Community != "notap-02" {
 		t.Fatalf("No-TAP room payload = %#v", got)
+	}
+	if got.ConnectionMode != "direct" {
+		t.Fatalf("No-TAP connection mode = %q, want direct", got.ConnectionMode)
 	}
 	if got.RelayHost != "notap.example.test" || got.RelayPort != 22333 || got.RelayToken != "notap-relay-secret" {
 		t.Fatalf("No-TAP relay payload = %#v", got)

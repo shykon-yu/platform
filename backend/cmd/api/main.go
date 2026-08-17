@@ -96,6 +96,7 @@ type room struct {
 	Capacity   int    `json:"capacity"`
 	Members    int    `json:"members"`
 	Status     string `json:"status"`
+	ConnectionMode string `json:"connection_mode"`
 }
 
 type roomMember struct {
@@ -137,6 +138,7 @@ type noTapLease struct {
 	RelayToken  string    `json:"relay_token"`
 	IceStunHost string    `json:"ice_stun_host"`
 	IceStunPort int       `json:"ice_stun_port"`
+	ConnectionMode string `json:"connection_mode"`
 }
 
 type noTapPeerProbe struct {

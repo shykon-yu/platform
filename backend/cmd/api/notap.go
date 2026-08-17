@@ -18,7 +18,7 @@ import (
 // IP or connection parameters.
 
 const noTapRoomSelect = `
-	SELECT r.id, r.code, r.name, r.region, r.subnet_cidr, r.capacity, r.status,
+	SELECT r.id, r.code, r.name, r.region, r.subnet_cidr, r.capacity, r.status, r.connection_mode,
 		COUNT(l.id) AS members
 	FROM no_tap_rooms r
 	LEFT JOIN no_tap_room_leases l
@@ -26,29 +26,30 @@ const noTapRoomSelect = `
 	GROUP BY r.id
 	ORDER BY r.sort_order, r.id`
 
-func (a *app) noTapLeasePayload(roomID int64, code, subnet, virtualIP, username string, expiresAt time.Time) noTapLease {
+func (a *app) noTapLeasePayload(roomID int64, code, subnet, virtualIP, username, connectionMode string, expiresAt time.Time) noTapLease {
 	return noTapLease{
 		RoomID: roomID, VirtualIP: virtualIP, LogicalIP: virtualIP, Username: username,
 		ExpiresAt: expiresAt, SubnetCIDR: subnet, Community: roomCommunity(code, roomID),
 		RelayHost: a.config.noTapRelayHost, RelayPort: a.config.noTapRelayPort,
 		RelayToken:  a.config.noTapRelayToken,
 		IceStunHost: a.config.noTapIceStunHost, IceStunPort: a.config.noTapIceStunPort,
+		ConnectionMode: connectionMode,
 	}
 }
 
 func (a *app) noTapRoomSession(w http.ResponseWriter, r *http.Request) {
 	var current noTapLease
 	var (
-		code, subnet, virtualIP, username string
+		code, subnet, connectionMode, virtualIP, username string
 	)
 	err := a.db.QueryRowContext(r.Context(), `
-		SELECT l.room_id, l.virtual_ip, l.relay_username, r.code, r.subnet_cidr, l.credential_expires_at
+		SELECT l.room_id, l.virtual_ip, l.relay_username, r.code, r.subnet_cidr, r.connection_mode, l.credential_expires_at
 		FROM no_tap_room_leases l
 		INNER JOIN no_tap_rooms r ON r.id = l.room_id
 		WHERE l.user_id = ? AND l.session_id = ? AND l.released_at IS NULL
 			AND l.credential_expires_at > UTC_TIMESTAMP()
 		ORDER BY l.id DESC LIMIT 1`, currentUserID(r), currentSessionID(r)).Scan(
-		&current.RoomID, &virtualIP, &username, &code, &subnet, &current.ExpiresAt)
+		&current.RoomID, &virtualIP, &username, &code, &subnet, &connectionMode, &current.ExpiresAt)
 	if err == sql.ErrNoRows {
 		respondJSON(w, http.StatusOK, map[string]any{"lease": nil})
 		return
@@ -57,7 +58,7 @@ func (a *app) noTapRoomSession(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "无法读取无网卡房间会话")
 		return
 	}
-	current = a.noTapLeasePayload(current.RoomID, code, subnet, virtualIP, username, current.ExpiresAt)
+	current = a.noTapLeasePayload(current.RoomID, code, subnet, virtualIP, username, connectionMode, current.ExpiresAt)
 	respondJSON(w, http.StatusOK, map[string]any{"lease": current})
 }
 
@@ -68,11 +69,11 @@ func (a *app) listNoTapRooms(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
-	rooms := make([]room, 0, 3)
+	rooms := make([]room, 0, 4)
 	for rows.Next() {
 		var item room
 		if err := rows.Scan(&item.ID, &item.Code, &item.Name, &item.Region, &item.SubnetCIDR,
-			&item.Capacity, &item.Status, &item.Members); err != nil {
+			&item.Capacity, &item.Status, &item.ConnectionMode, &item.Members); err != nil {
 			respondError(w, http.StatusInternalServerError, "无法读取无网卡房间")
 			return
 		}
@@ -92,7 +93,7 @@ func (a *app) getNoTapRoom(w http.ResponseWriter, r *http.Request) {
 	}
 	var item room
 	err := a.db.QueryRowContext(r.Context(), `
-		SELECT r.id, r.code, r.name, r.region, r.subnet_cidr, r.capacity, r.status,
+		SELECT r.id, r.code, r.name, r.region, r.subnet_cidr, r.capacity, r.status, r.connection_mode,
 			COUNT(l.id) AS members
 		FROM no_tap_rooms r
 		LEFT JOIN no_tap_room_leases l
@@ -100,7 +101,7 @@ func (a *app) getNoTapRoom(w http.ResponseWriter, r *http.Request) {
 		WHERE r.id = ?
 		GROUP BY r.id`, roomID).Scan(
 		&item.ID, &item.Code, &item.Name, &item.Region, &item.SubnetCIDR, &item.Capacity,
-		&item.Status, &item.Members)
+		&item.Status, &item.ConnectionMode, &item.Members)
 	if err == sql.ErrNoRows {
 		respondError(w, http.StatusNotFound, "无网卡房间不存在")
 		return
@@ -193,11 +194,11 @@ func (a *app) joinNoTapRoom(w http.ResponseWriter, r *http.Request) {
 		respondErrorCode(w, http.StatusUnauthorized, "SESSION_REPLACED", "账号已在其他设备登录")
 		return
 	}
-	var code, subnet, ipStart, ipEnd, status string
+	var code, subnet, ipStart, ipEnd, status, connectionMode string
 	var capacity int
 	err = tx.QueryRowContext(r.Context(), `
-		SELECT code, subnet_cidr, ip_start, ip_end, status, capacity
-		FROM no_tap_rooms WHERE id = ? FOR UPDATE`, roomID).Scan(&code, &subnet, &ipStart, &ipEnd, &status, &capacity)
+		SELECT code, subnet_cidr, ip_start, ip_end, status, capacity, connection_mode
+		FROM no_tap_rooms WHERE id = ? FOR UPDATE`, roomID).Scan(&code, &subnet, &ipStart, &ipEnd, &status, &capacity, &connectionMode)
 	if err == sql.ErrNoRows {
 		respondError(w, http.StatusNotFound, "无网卡房间不存在")
 		return
@@ -229,7 +230,7 @@ func (a *app) joinNoTapRoom(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusInternalServerError, "无法进入无网卡房间")
 			return
 		}
-		respondJSON(w, http.StatusOK, map[string]any{"lease": a.noTapLeasePayload(roomID, code, subnet, existingIP, existingUsername, expiresAt)})
+		respondJSON(w, http.StatusOK, map[string]any{"lease": a.noTapLeasePayload(roomID, code, subnet, existingIP, existingUsername, connectionMode, expiresAt)})
 		return
 	}
 	if err != sql.ErrNoRows {
@@ -265,7 +266,7 @@ func (a *app) joinNoTapRoom(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "无法进入无网卡房间")
 		return
 	}
-	respondJSON(w, http.StatusOK, map[string]any{"lease": a.noTapLeasePayload(roomID, code, subnet, assignedIP, username, expiresAt)})
+	respondJSON(w, http.StatusOK, map[string]any{"lease": a.noTapLeasePayload(roomID, code, subnet, assignedIP, username, connectionMode, expiresAt)})
 }
 
 func (a *app) heartbeatNoTapRoom(w http.ResponseWriter, r *http.Request) {
@@ -382,9 +383,22 @@ func (a *app) requireNoTapRoomMember(w http.ResponseWriter, r *http.Request, roo
 	return true
 }
 
+func (a *app) requireNoTapDirectRoom(w http.ResponseWriter, r *http.Request, roomID int64) bool {
+	var mode string
+	if err := a.db.QueryRowContext(r.Context(), `SELECT connection_mode FROM no_tap_rooms WHERE id = ?`, roomID).Scan(&mode); err != nil {
+		respondError(w, http.StatusInternalServerError, "无法确认房间连接模式")
+		return false
+	}
+	if mode != "direct" {
+		respondError(w, http.StatusConflict, "该房间仅使用云中继")
+		return false
+	}
+	return true
+}
+
 func (a *app) createNoTapPeerProbe(w http.ResponseWriter, r *http.Request) {
 	roomID, ok := roomIDFromRequest(w, r)
-	if !ok || !a.requireNoTapRoomMember(w, r, roomID) {
+	if !ok || !a.requireNoTapRoomMember(w, r, roomID) || !a.requireNoTapDirectRoom(w, r, roomID) {
 		return
 	}
 	var request noTapPeerProbeRequest
@@ -446,7 +460,7 @@ func (a *app) createNoTapPeerProbe(w http.ResponseWriter, r *http.Request) {
 
 func (a *app) listIncomingNoTapPeerProbes(w http.ResponseWriter, r *http.Request) {
 	roomID, ok := roomIDFromRequest(w, r)
-	if !ok || !a.requireNoTapRoomMember(w, r, roomID) {
+	if !ok || !a.requireNoTapRoomMember(w, r, roomID) || !a.requireNoTapDirectRoom(w, r, roomID) {
 		return
 	}
 	purpose := normalizeNoTapProbePurpose(r.URL.Query().Get("purpose"))
@@ -479,7 +493,7 @@ func (a *app) listIncomingNoTapPeerProbes(w http.ResponseWriter, r *http.Request
 
 func (a *app) getNoTapPeerProbe(w http.ResponseWriter, r *http.Request) {
 	roomID, ok := roomIDFromRequest(w, r)
-	if !ok || !a.requireNoTapRoomMember(w, r, roomID) {
+	if !ok || !a.requireNoTapRoomMember(w, r, roomID) || !a.requireNoTapDirectRoom(w, r, roomID) {
 		return
 	}
 	probeID, ok := noTapProbeIDFromRequest(w, r)
@@ -507,7 +521,7 @@ func (a *app) getNoTapPeerProbe(w http.ResponseWriter, r *http.Request) {
 
 func (a *app) answerNoTapPeerProbe(w http.ResponseWriter, r *http.Request) {
 	roomID, ok := roomIDFromRequest(w, r)
-	if !ok || !a.requireNoTapRoomMember(w, r, roomID) {
+	if !ok || !a.requireNoTapRoomMember(w, r, roomID) || !a.requireNoTapDirectRoom(w, r, roomID) {
 		return
 	}
 	probeID, ok := noTapProbeIDFromRequest(w, r)
@@ -537,7 +551,7 @@ func (a *app) answerNoTapPeerProbe(w http.ResponseWriter, r *http.Request) {
 
 func (a *app) publishNoTapICE(w http.ResponseWriter, r *http.Request) {
 	roomID, ok := roomIDFromRequest(w, r)
-	if !ok {
+	if !ok || !a.requireNoTapDirectRoom(w, r, roomID) {
 		return
 	}
 	var request noTapICERequest
