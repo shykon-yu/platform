@@ -22,6 +22,7 @@ const (
 	noTapPeerProbeMigration = "20260816_add_no_tap_peer_probes"
 	noTapGameProbeMigration = "20260817_add_no_tap_game_probe_fields"
 	noTapRoomModesMigration = "20260818_add_no_tap_room_modes"
+	noTapRoomFourMigration  = "20260818_add_no_tap_room_04"
 )
 
 var safeIdentifier = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
@@ -75,6 +76,9 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	if err := runMigration(ctx, db, noTapRoomModesMigration, migrateNoTapRoomModes); err != nil {
+		return err
+	}
+	if err := runMigration(ctx, db, noTapRoomFourMigration, migrateNoTapRoomFour); err != nil {
 		return err
 	}
 	return nil
@@ -163,6 +167,21 @@ func migrateNoTapRoomModes(ctx context.Context, db *sql.DB) error {
 			region = CASE WHEN id IN (1, 2) THEN '直连' ELSE '中继' END
 		WHERE id BETWEEN 1 AND 4`); err != nil {
 		return fmt.Errorf("seed no-TAP room modes: %w", err)
+	}
+	return nil
+}
+
+func migrateNoTapRoomFour(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO no_tap_rooms
+			(id, code, name, region, connection_mode, subnet_cidr, ip_start, ip_end, capacity, status, sort_order)
+		VALUES
+			(4, 'notap-04', '房间 04', '中继', 'relay', '10.122.4.0/24', '10.122.4.10', '10.122.4.109', 100, 'open', 4)
+		ON DUPLICATE KEY UPDATE
+			name = VALUES(name), region = VALUES(region), connection_mode = VALUES(connection_mode),
+			subnet_cidr = VALUES(subnet_cidr), ip_start = VALUES(ip_start), ip_end = VALUES(ip_end),
+			capacity = VALUES(capacity), sort_order = VALUES(sort_order)`); err != nil {
+		return fmt.Errorf("seed no-TAP room 4: %w", err)
 	}
 	return nil
 }
