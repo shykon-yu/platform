@@ -20,6 +20,7 @@ const (
 	noTapICEMigration       = "20260815_add_no_tap_ice_description"
 	noTapRoomNamesMigration = "20260816_rename_no_tap_room_labels"
 	noTapPeerProbeMigration = "20260816_add_no_tap_peer_probes"
+	noTapGameProbeMigration = "20260817_add_no_tap_game_probe_fields"
 )
 
 var safeIdentifier = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
@@ -67,6 +68,9 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	if err := runMigration(ctx, db, noTapPeerProbeMigration, migrateNoTapPeerProbes); err != nil {
+		return err
+	}
+	if err := runMigration(ctx, db, noTapGameProbeMigration, migrateNoTapGameProbeFields); err != nil {
 		return err
 	}
 	return nil
@@ -189,6 +193,27 @@ func migrateNoTapPeerProbes(ctx context.Context, db *sql.DB) error {
 			CONSTRAINT no_tap_peer_probes_target_foreign FOREIGN KEY (target_user_id) REFERENCES platform_users (id)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`); err != nil {
 		return fmt.Errorf("create no-TAP peer probes: %w", err)
+	}
+	return nil
+}
+
+func migrateNoTapGameProbeFields(ctx context.Context, db *sql.DB) error {
+	for _, field := range []struct {
+		name string
+		sql  string
+	}{
+		{name: "purpose", sql: `ALTER TABLE no_tap_peer_probes ADD COLUMN purpose VARCHAR(16) NOT NULL DEFAULT 'ping' AFTER target_user_id`},
+		{name: "session_key", sql: `ALTER TABLE no_tap_peer_probes ADD COLUMN session_key VARCHAR(128) NULL AFTER purpose`},
+	} {
+		exists, err := columnExists(ctx, db, "no_tap_peer_probes", field.name)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			if _, err := db.ExecContext(ctx, field.sql); err != nil {
+				return fmt.Errorf("add no-TAP peer probe %s: %w", field.name, err)
+			}
+		}
 	}
 	return nil
 }

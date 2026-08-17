@@ -143,6 +143,8 @@ type noTapPeerProbe struct {
 	ID                   int64     `json:"id"`
 	RequesterUserID      int64     `json:"requester_user_id"`
 	TargetUserID         int64     `json:"target_user_id"`
+	Purpose              string    `json:"purpose"`
+	SessionKey           string    `json:"session_key,omitempty"`
 	RequesterDescription string    `json:"requester_description,omitempty"`
 	TargetDescription    string    `json:"target_description,omitempty"`
 	ExpiresAt            time.Time `json:"expires_at"`

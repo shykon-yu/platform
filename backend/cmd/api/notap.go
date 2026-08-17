@@ -333,6 +333,8 @@ const noTapPeerProbeTTL = 60 * time.Second
 
 type noTapPeerProbeRequest struct {
 	TargetUserID     int64  `json:"target_user_id"`
+	Purpose          string `json:"purpose"`
+	SessionKey       string `json:"session_key"`
 	LocalDescription string `json:"local_description"`
 }
 
@@ -343,6 +345,13 @@ type noTapPeerProbeAnswerRequest struct {
 func validNoTapICEDescription(value string) bool {
 	length := len(value)
 	return length >= 16 && length <= 4096 && strings.Contains(value, "a=candidate:")
+}
+
+func normalizeNoTapProbePurpose(value string) string {
+	if value == "game" {
+		return "game"
+	}
+	return "ping"
 }
 
 func noTapProbeIDFromRequest(w http.ResponseWriter, r *http.Request) (int64, bool) {
@@ -383,6 +392,11 @@ func (a *app) createNoTapPeerProbe(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "直连探测参数无效")
 		return
 	}
+	request.Purpose = normalizeNoTapProbePurpose(request.Purpose)
+	if request.Purpose == "game" && (len(request.SessionKey) < 3 || len(request.SessionKey) > 128) {
+		respondError(w, http.StatusBadRequest, "比赛直连事务键无效")
+		return
+	}
 
 	var targetPresent bool
 	err := a.db.QueryRowContext(r.Context(), `
@@ -404,9 +418,9 @@ func (a *app) createNoTapPeerProbe(w http.ResponseWriter, r *http.Request) {
 	// stale rows here can fill the target's polling window in a busy room.
 	if _, err := a.db.ExecContext(r.Context(), `
 		DELETE FROM no_tap_peer_probes
-		WHERE room_id = ? AND requester_user_id = ? AND target_user_id = ?
+		WHERE room_id = ? AND requester_user_id = ? AND target_user_id = ? AND purpose = ?
 			AND target_description IS NULL`,
-		roomID, currentUserID(r), request.TargetUserID); err != nil {
+		roomID, currentUserID(r), request.TargetUserID, request.Purpose); err != nil {
 		respondError(w, http.StatusInternalServerError, "无法清理旧的直连探测")
 		return
 	}
@@ -414,8 +428,8 @@ func (a *app) createNoTapPeerProbe(w http.ResponseWriter, r *http.Request) {
 	expiresAt := time.Now().UTC().Add(noTapPeerProbeTTL)
 	result, err := a.db.ExecContext(r.Context(), `
 		INSERT INTO no_tap_peer_probes
-			(room_id, requester_user_id, target_user_id, requester_description, expires_at)
-		VALUES (?, ?, ?, ?, ?)`, roomID, currentUserID(r), request.TargetUserID, request.LocalDescription, expiresAt)
+			(room_id, requester_user_id, target_user_id, purpose, session_key, requester_description, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`, roomID, currentUserID(r), request.TargetUserID, request.Purpose, request.SessionKey, request.LocalDescription, expiresAt)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "无法创建直连探测")
 		return
@@ -426,7 +440,7 @@ func (a *app) createNoTapPeerProbe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondJSON(w, http.StatusCreated, map[string]any{"probe": noTapPeerProbe{
-		ID: id, RequesterUserID: currentUserID(r), TargetUserID: request.TargetUserID, ExpiresAt: expiresAt,
+		ID: id, RequesterUserID: currentUserID(r), TargetUserID: request.TargetUserID, Purpose: request.Purpose, SessionKey: request.SessionKey, ExpiresAt: expiresAt,
 	}})
 }
 
@@ -435,12 +449,13 @@ func (a *app) listIncomingNoTapPeerProbes(w http.ResponseWriter, r *http.Request
 	if !ok || !a.requireNoTapRoomMember(w, r, roomID) {
 		return
 	}
+	purpose := normalizeNoTapProbePurpose(r.URL.Query().Get("purpose"))
 	rows, err := a.db.QueryContext(r.Context(), `
-		SELECT id, requester_user_id, target_user_id, requester_description, expires_at
+		SELECT id, requester_user_id, target_user_id, purpose, COALESCE(session_key, ''), requester_description, expires_at
 		FROM no_tap_peer_probes
-		WHERE room_id = ? AND target_user_id = ? AND target_description IS NULL
+		WHERE room_id = ? AND target_user_id = ? AND purpose = ? AND target_description IS NULL
 			AND expires_at > UTC_TIMESTAMP()
-		ORDER BY id DESC LIMIT 32`, roomID, currentUserID(r))
+		ORDER BY id DESC LIMIT 32`, roomID, currentUserID(r), purpose)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "无法读取直连探测")
 		return
@@ -449,7 +464,7 @@ func (a *app) listIncomingNoTapPeerProbes(w http.ResponseWriter, r *http.Request
 	probes := make([]noTapPeerProbe, 0)
 	for rows.Next() {
 		var probe noTapPeerProbe
-		if err := rows.Scan(&probe.ID, &probe.RequesterUserID, &probe.TargetUserID, &probe.RequesterDescription, &probe.ExpiresAt); err != nil {
+		if err := rows.Scan(&probe.ID, &probe.RequesterUserID, &probe.TargetUserID, &probe.Purpose, &probe.SessionKey, &probe.RequesterDescription, &probe.ExpiresAt); err != nil {
 			respondError(w, http.StatusInternalServerError, "无法读取直连探测")
 			return
 		}
@@ -473,12 +488,12 @@ func (a *app) getNoTapPeerProbe(w http.ResponseWriter, r *http.Request) {
 	}
 	var probe noTapPeerProbe
 	err := a.db.QueryRowContext(r.Context(), `
-		SELECT id, requester_user_id, target_user_id, requester_description,
+		SELECT id, requester_user_id, target_user_id, purpose, COALESCE(session_key, ''), requester_description,
 			COALESCE(target_description, ''), expires_at
 		FROM no_tap_peer_probes
 		WHERE id = ? AND room_id = ? AND (requester_user_id = ? OR target_user_id = ?)
 			AND expires_at > UTC_TIMESTAMP()`, probeID, roomID, currentUserID(r), currentUserID(r)).Scan(
-		&probe.ID, &probe.RequesterUserID, &probe.TargetUserID, &probe.RequesterDescription, &probe.TargetDescription, &probe.ExpiresAt)
+		&probe.ID, &probe.RequesterUserID, &probe.TargetUserID, &probe.Purpose, &probe.SessionKey, &probe.RequesterDescription, &probe.TargetDescription, &probe.ExpiresAt)
 	if err == sql.ErrNoRows {
 		respondError(w, http.StatusNotFound, "直连探测已结束")
 		return
