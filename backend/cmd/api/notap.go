@@ -331,6 +331,7 @@ type noTapICERequest struct {
 }
 
 const noTapPeerProbeTTL = 60 * time.Second
+const noTapICEDescriptionMaxLength = 16384
 
 type noTapPeerProbeRequest struct {
 	TargetUserID     int64  `json:"target_user_id"`
@@ -345,7 +346,7 @@ type noTapPeerProbeAnswerRequest struct {
 
 func validNoTapICEDescription(value string) bool {
 	length := len(value)
-	return length >= 16 && length <= 4096 && strings.Contains(value, "a=candidate:")
+	return length >= 16 && length <= noTapICEDescriptionMaxLength && strings.Contains(value, "a=candidate:")
 }
 
 func normalizeNoTapProbePurpose(value string) string {
@@ -555,7 +556,7 @@ func (a *app) publishNoTapICE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request noTapICERequest
-	if !decodeJSON(w, r, &request) || len(request.LocalDescription) < 16 || len(request.LocalDescription) > 4096 {
+	if !decodeJSON(w, r, &request) || len(request.LocalDescription) < 16 || len(request.LocalDescription) > noTapICEDescriptionMaxLength {
 		respondError(w, http.StatusBadRequest, "ICE candidate 数据无效")
 		return
 	}
