@@ -128,7 +128,7 @@ func TestMigrateLegacySchema(t *testing.T) {
 		}
 	}
 
-	rows, err := db.QueryContext(ctx, "SELECT id, subnet_cidr, ip_start, ip_end FROM no_tap_rooms ORDER BY id")
+	rows, err := db.QueryContext(ctx, "SELECT id, connection_mode, subnet_cidr, ip_start, ip_end FROM no_tap_rooms ORDER BY id")
 	if err != nil {
 		t.Fatalf("read No-TAP rooms: %v", err)
 	}
@@ -137,22 +137,27 @@ func TestMigrateLegacySchema(t *testing.T) {
 	for rows.Next() {
 		roomCount++
 		var id int
+		var mode string
 		var subnet, start, end string
-		if err := rows.Scan(&id, &subnet, &start, &end); err != nil {
+		if err := rows.Scan(&id, &mode, &subnet, &start, &end); err != nil {
 			t.Fatalf("scan No-TAP room: %v", err)
 		}
-		wantSubnet := fmt.Sprintf("10.122.%d.0/24", id)
-		wantStart := fmt.Sprintf("10.122.%d.10", id)
-		wantEnd := fmt.Sprintf("10.122.%d.109", id)
-		if id < 1 || id > 4 || subnet != wantSubnet || start != wantStart || end != wantEnd {
+		subnetPrefix := "10.122"
+		if id <= 2 { subnetPrefix = "10.222" }
+		wantSubnet := fmt.Sprintf("%s.%d.0/24", subnetPrefix, id)
+		wantStart := fmt.Sprintf("%s.%d.10", subnetPrefix, id)
+		wantEnd := fmt.Sprintf("%s.%d.109", subnetPrefix, id)
+		wantMode := "relay"
+		if id <= 2 { wantMode = "tap" } else if id <= 4 { wantMode = "direct" }
+		if id < 1 || id > 6 || mode != wantMode || subnet != wantSubnet || start != wantStart || end != wantEnd {
 			t.Fatalf("No-TAP room %d = %q %q-%q", id, subnet, start, end)
 		}
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate No-TAP rooms: %v", err)
 	}
-	if roomCount != 4 {
-		t.Fatalf("No-TAP room count = %d, want 4", roomCount)
+	if roomCount != 6 {
+		t.Fatalf("No-TAP room count = %d, want 6", roomCount)
 	}
 
 	for _, item := range []struct{ table, column string }{

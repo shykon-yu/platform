@@ -139,6 +139,8 @@ type noTapLease struct {
 	IceStunHost string    `json:"ice_stun_host"`
 	IceStunPort int       `json:"ice_stun_port"`
 	ConnectionMode string `json:"connection_mode"`
+	ServerHost string `json:"server_host,omitempty"`
+	ServerPort int `json:"server_port,omitempty"`
 }
 
 type noTapPeerProbe struct {

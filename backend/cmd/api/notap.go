@@ -34,6 +34,7 @@ func (a *app) noTapLeasePayload(roomID int64, code, subnet, virtualIP, username,
 		RelayToken:  a.config.noTapRelayToken,
 		IceStunHost: a.config.noTapIceStunHost, IceStunPort: a.config.noTapIceStunPort,
 		ConnectionMode: connectionMode,
+		ServerHost: a.config.openVPNClientHost, ServerPort: a.roomServerPort(roomID),
 	}
 }
 
@@ -173,10 +174,6 @@ func (a *app) joinNoTapRoom(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if a.config.noTapRelayHost == "" || a.config.noTapRelayPort == 0 || a.config.noTapRelayToken == "" {
-		respondError(w, http.StatusServiceUnavailable, "无网卡中继尚未配置")
-		return
-	}
 	userID, sessionID := currentUserID(r), currentSessionID(r)
 	requestIP := clientIP(r)
 	tx, err := a.db.BeginTx(r.Context(), &sql.TxOptions{Isolation: sql.LevelSerializable})
@@ -209,6 +206,10 @@ func (a *app) joinNoTapRoom(w http.ResponseWriter, r *http.Request) {
 	}
 	if status != "open" {
 		respondError(w, http.StatusConflict, "无网卡房间暂不可进入")
+		return
+	}
+	if connectionMode != "tap" && (a.config.noTapRelayHost == "" || a.config.noTapRelayPort == 0 || a.config.noTapRelayToken == "") {
+		respondError(w, http.StatusServiceUnavailable, "无网卡中继尚未配置")
 		return
 	}
 	var existingIP, existingUsername string

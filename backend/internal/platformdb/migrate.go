@@ -23,6 +23,7 @@ const (
 	noTapGameProbeMigration = "20260817_add_no_tap_game_probe_fields"
 	noTapRoomModesMigration = "20260818_add_no_tap_room_modes"
 	noTapRoomFourMigration  = "20260818_add_no_tap_room_04"
+	noTapTapRoomsMigration  = "20260908_add_no_tap_tap_rooms"
 )
 
 var safeIdentifier = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
@@ -81,6 +82,9 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	if err := runMigration(ctx, db, noTapRoomFourMigration, migrateNoTapRoomFour); err != nil {
 		return err
 	}
+	if err := runMigration(ctx, db, noTapTapRoomsMigration, migrateNoTapTapRooms); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -91,7 +95,7 @@ func migrateNoTapRooms(ctx context.Context, db *sql.DB) error {
 			code VARCHAR(32) NOT NULL,
 			name VARCHAR(64) NOT NULL,
 			region VARCHAR(32) NOT NULL,
-			connection_mode ENUM('direct', 'relay') NOT NULL DEFAULT 'direct',
+			connection_mode ENUM('tap', 'direct', 'relay') NOT NULL DEFAULT 'direct',
 			subnet_cidr VARCHAR(32) NOT NULL,
 			ip_start VARCHAR(15) NOT NULL,
 			ip_end VARCHAR(15) NOT NULL,
@@ -131,20 +135,20 @@ func migrateNoTapRooms(ctx context.Context, db *sql.DB) error {
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`); err != nil {
 		return fmt.Errorf("create no-TAP leases: %w", err)
 	}
-	for index := 1; index <= 4; index++ {
+	for index := 1; index <= 6; index++ {
 		code := fmt.Sprintf("notap-%02d", index)
 		name := fmt.Sprintf("房间 %02d", index)
-		region := "中继"
-		if index <= 2 {
-			region = "直连"
-		}
-		subnet := fmt.Sprintf("10.122.%d.0/24", index)
-		start := fmt.Sprintf("10.122.%d.10", index)
-		end := fmt.Sprintf("10.122.%d.109", index)
+		region, mode, subnetPrefix := "中继", "relay", "10.122"
+		// Keep this first seed compatible with databases whose enum predates TAP;
+		// the follow-up migration expands the enum and applies the final modes.
+		if index <= 4 { region, mode = "直连", "direct" }
+		subnet := fmt.Sprintf("%s.%d.0/24", subnetPrefix, index)
+		start := fmt.Sprintf("%s.%d.10", subnetPrefix, index)
+		end := fmt.Sprintf("%s.%d.109", subnetPrefix, index)
 		if _, err := db.ExecContext(ctx, `
-			INSERT INTO no_tap_rooms (id, code, name, region, subnet_cidr, ip_start, ip_end, capacity, sort_order)
-			VALUES (?, ?, ?, ?, ?, ?, ?, 100, ?)
-			ON DUPLICATE KEY UPDATE name = VALUES(name), region = VALUES(region), subnet_cidr = VALUES(subnet_cidr), ip_start = VALUES(ip_start), ip_end = VALUES(ip_end), sort_order = VALUES(sort_order)`, index, code, name, region, subnet, start, end, index); err != nil {
+			INSERT INTO no_tap_rooms (id, code, name, region, connection_mode, subnet_cidr, ip_start, ip_end, capacity, sort_order)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, 100, ?)
+			ON DUPLICATE KEY UPDATE name = VALUES(name), region = VALUES(region), connection_mode = VALUES(connection_mode), subnet_cidr = VALUES(subnet_cidr), ip_start = VALUES(ip_start), ip_end = VALUES(ip_end), sort_order = VALUES(sort_order)`, index, code, name, region, mode, subnet, start, end, index); err != nil {
 			return fmt.Errorf("seed no-TAP room %d: %w", index, err)
 		}
 	}
@@ -157,7 +161,7 @@ func migrateNoTapRoomModes(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	if !column {
-		if _, err := db.ExecContext(ctx, `ALTER TABLE no_tap_rooms ADD COLUMN connection_mode ENUM('direct', 'relay') NOT NULL DEFAULT 'direct' AFTER region`); err != nil {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE no_tap_rooms ADD COLUMN connection_mode ENUM('tap', 'direct', 'relay') NOT NULL DEFAULT 'direct' AFTER region`); err != nil {
 			return fmt.Errorf("add no-TAP room mode: %w", err)
 		}
 	}
@@ -168,6 +172,23 @@ func migrateNoTapRoomModes(ctx context.Context, db *sql.DB) error {
 		WHERE id BETWEEN 1 AND 4`); err != nil {
 		return fmt.Errorf("seed no-TAP room modes: %w", err)
 	}
+	return nil
+}
+
+func migrateNoTapTapRooms(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, `ALTER TABLE no_tap_rooms MODIFY connection_mode ENUM('tap', 'direct', 'relay') NOT NULL DEFAULT 'direct'`); err != nil {
+		return fmt.Errorf("expand no-TAP room modes: %w", err)
+	}
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO no_tap_rooms (id, code, name, region, connection_mode, subnet_cidr, ip_start, ip_end, capacity, status, sort_order) VALUES
+		(1, 'notap-01', '网卡房间 01', '网卡', 'tap', '10.222.1.0/24', '10.222.1.10', '10.222.1.109', 100, 'open', 1),
+		(2, 'notap-02', '网卡房间 02', '网卡', 'tap', '10.222.2.0/24', '10.222.2.10', '10.222.2.109', 100, 'open', 2),
+		(3, 'notap-03', '直连房间 03', '直连', 'direct', '10.122.3.0/24', '10.122.3.10', '10.122.3.109', 100, 'open', 3),
+		(4, 'notap-04', '直连房间 04', '直连', 'direct', '10.122.4.0/24', '10.122.4.10', '10.122.4.109', 100, 'open', 4),
+		(5, 'notap-05', '中继房间 05', '中继', 'relay', '10.122.5.0/24', '10.122.5.10', '10.122.5.109', 100, 'open', 5),
+		(6, 'notap-06', '中继房间 06', '中继', 'relay', '10.122.6.0/24', '10.122.6.10', '10.122.6.109', 100, 'open', 6)
+		ON DUPLICATE KEY UPDATE name=VALUES(name), region=VALUES(region), connection_mode=VALUES(connection_mode), subnet_cidr=VALUES(subnet_cidr), ip_start=VALUES(ip_start), ip_end=VALUES(ip_end), sort_order=VALUES(sort_order)`)
+	if err != nil { return fmt.Errorf("seed no-TAP six transport rooms: %w", err) }
 	return nil
 }
 

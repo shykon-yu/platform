@@ -68,7 +68,7 @@ CREATE TABLE no_tap_rooms (
   code VARCHAR(32) NOT NULL,
   name VARCHAR(64) NOT NULL,
   region VARCHAR(32) NOT NULL,
-  connection_mode ENUM('direct', 'relay') NOT NULL DEFAULT 'direct',
+  connection_mode ENUM('tap', 'direct', 'relay') NOT NULL DEFAULT 'direct',
   subnet_cidr VARCHAR(32) NOT NULL,
   ip_start VARCHAR(15) NOT NULL,
   ip_end VARCHAR(15) NOT NULL,
@@ -122,7 +122,9 @@ CREATE TABLE no_tap_peer_probes (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 INSERT INTO no_tap_rooms (id, code, name, region, connection_mode, subnet_cidr, ip_start, ip_end, capacity, sort_order) VALUES
-  (1, 'notap-01', '房间 01', '直连', 'direct', '10.122.1.0/24', '10.122.1.10', '10.122.1.109', 100, 1),
-  (2, 'notap-02', '房间 02', '直连', 'direct', '10.122.2.0/24', '10.122.2.10', '10.122.2.109', 100, 2),
-  (3, 'notap-03', '房间 03', '中继', 'relay', '10.122.3.0/24', '10.122.3.10', '10.122.3.109', 100, 3),
-  (4, 'notap-04', '房间 04', '中继', 'relay', '10.122.4.0/24', '10.122.4.10', '10.122.4.109', 100, 4);
+  (1, 'notap-01', '网卡房间 01', '网卡', 'tap', '10.222.1.0/24', '10.222.1.10', '10.222.1.109', 100, 1),
+  (2, 'notap-02', '网卡房间 02', '网卡', 'tap', '10.222.2.0/24', '10.222.2.10', '10.222.2.109', 100, 2),
+  (3, 'notap-03', '直连房间 03', '直连', 'direct', '10.122.3.0/24', '10.122.3.10', '10.122.3.109', 100, 3),
+  (4, 'notap-04', '直连房间 04', '直连', 'direct', '10.122.4.0/24', '10.122.4.10', '10.122.4.109', 100, 4),
+  (5, 'notap-05', '中继房间 05', '中继', 'relay', '10.122.5.0/24', '10.122.5.10', '10.122.5.109', 100, 5),
+  (6, 'notap-06', '中继房间 06', '中继', 'relay', '10.122.6.0/24', '10.122.6.10', '10.122.6.109', 100, 6);
