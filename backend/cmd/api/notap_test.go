@@ -8,6 +8,9 @@ import (
 func TestNoTapLeasePayloadUsesDedicatedRelay(t *testing.T) {
 	a := &app{config: config{
 		openVPNClientHost: "tap.example.test",
+		n2nClientHost: "n2n.example.test",
+		n2nClientPort: 22222,
+		n2nRoomPorts: map[int64]int{},
 		noTapRelayHost:    "notap.example.test",
 		noTapRelayPort:    22333,
 		noTapRelayToken:   "notap-relay-secret",
@@ -30,6 +33,9 @@ func TestNoTapLeasePayloadUsesDedicatedRelay(t *testing.T) {
 	}
 	if got.RelayHost == a.config.openVPNClientHost {
 		t.Fatal("No-TAP lease used the TAP/n2n host")
+	}
+	if got.ServerHost != "n2n.example.test" || got.ServerPort != 22222 {
+		t.Fatalf("No-TAP n2n payload = %#v", got)
 	}
 	if !got.ExpiresAt.Equal(expiresAt) {
 		t.Fatalf("No-TAP expiry = %v, want %v", got.ExpiresAt, expiresAt)

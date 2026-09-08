@@ -35,6 +35,9 @@ type config struct {
 	openVPNInternalSecret                                    string
 	openVPNClientPortBase                                    int
 	openVPNRoomPorts                                         map[int64]int
+	n2nClientHost                                             string
+	n2nClientPort                                             int
+	n2nRoomPorts                                              map[int64]int
 	noTapRelayHost                                           string
 	noTapRelayPort                                           int
 	noTapRelayToken                                          string
@@ -267,15 +270,16 @@ func loadConfig() config {
 	for _, origin := range strings.Split(getenv("CORS_ORIGIN", defaultCORSOrigin), ",") {
 		origins[strings.TrimSpace(origin)] = true
 	}
-	openVPNClientHost := getenv("N2N_CLIENT_HOST", getenv("OPENVPN_CLIENT_HOST", "pending-n2n-host"))
+	openVPNClientHost := getenv("OPENVPN_CLIENT_HOST", "pending-openvpn-host")
 	return config{
 		port: getenv("API_PORT", "8080"), mysqlDSN: getenv("MYSQL_DSN", "pes8:pes8-dev-password@tcp(localhost:3306)/pes8_platform?parseTime=true&charset=utf8mb4&loc=Local"),
 		soccerMySQLDSN: getenv("SOCCER_MYSQL_DSN", ""),
 		redisAddr:      getenv("REDIS_ADDR", "localhost:6379"), redisPassword: getenv("REDIS_PASSWORD", "redis-dev-password"),
 		jwtSecret: getenv("JWT_SECRET", "local-development-secret-change-before-production"), jwtAudience: getenv("JWT_AUDIENCE", "we8-platform:"+openVPNClientHost), corsOrigins: origins,
 		soccerAuthURL:     getenv("SOCCER_AUTH_URL", "http://localhost/api/v1/auth/platform-login"),
-		openVPNClientHost: openVPNClientHost, openVPNInternalSecret: getenv("OPENVPN_INTERNAL_SECRET", ""), openVPNClientPortBase: envInt("N2N_CLIENT_PORT", envInt("N2N_CLIENT_PORT_BASE", envInt("OPENVPN_CLIENT_PORT_BASE", 22222))), openVPNRoomPorts: parseRoomPorts(getenv("N2N_ROOM_PORTS", getenv("OPENVPN_ROOM_PORTS", ""))),
-		noTapRelayHost: getenv("WEL_NOTAP_RELAY_HOST", openVPNClientHost), noTapRelayPort: envInt("WEL_NOTAP_RELAY_PORT", 22333), noTapRelayToken: getenv("WEL_NOTAP_RELAY_TOKEN", getenv("WEL_NOTAP_TOKEN", "")),
+		openVPNClientHost: openVPNClientHost, openVPNInternalSecret: getenv("OPENVPN_INTERNAL_SECRET", ""), openVPNClientPortBase: envInt("OPENVPN_CLIENT_PORT_BASE", 12000), openVPNRoomPorts: parseRoomPorts(getenv("OPENVPN_ROOM_PORTS", "")),
+		n2nClientHost: getenv("N2N_CLIENT_HOST", openVPNClientHost), n2nClientPort: envInt("N2N_CLIENT_PORT", 22222), n2nRoomPorts: parseRoomPorts(getenv("N2N_ROOM_PORTS", "")),
+		noTapRelayHost: getenv("WEL_NOTAP_RELAY_HOST", getenv("N2N_CLIENT_HOST", openVPNClientHost)), noTapRelayPort: envInt("WEL_NOTAP_RELAY_PORT", 22333), noTapRelayToken: getenv("WEL_NOTAP_RELAY_TOKEN", getenv("WEL_NOTAP_TOKEN", "")),
 		noTapIceStunHost: getenv("WEL_NOTAP_ICE_STUN_HOST", "stun.l.google.com"), noTapIceStunPort: envInt("WEL_NOTAP_ICE_STUN_PORT", 19302),
 	}
 }
@@ -318,6 +322,16 @@ func (a *app) roomServerPort(roomID int64) int {
 	}
 	if a.config.openVPNClientPortBase > 0 {
 		return a.config.openVPNClientPortBase
+	}
+	return 22222
+}
+
+func (a *app) n2nServerPort(roomID int64) int {
+	if port, ok := a.config.n2nRoomPorts[roomID]; ok && port > 0 {
+		return port
+	}
+	if a.config.n2nClientPort > 0 {
+		return a.config.n2nClientPort
 	}
 	return 22222
 }

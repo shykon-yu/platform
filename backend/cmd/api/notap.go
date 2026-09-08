@@ -34,7 +34,7 @@ func (a *app) noTapLeasePayload(roomID int64, code, subnet, virtualIP, username,
 		RelayToken:  a.config.noTapRelayToken,
 		IceStunHost: a.config.noTapIceStunHost, IceStunPort: a.config.noTapIceStunPort,
 		ConnectionMode: connectionMode,
-		ServerHost: a.config.openVPNClientHost, ServerPort: a.roomServerPort(roomID),
+		ServerHost: a.config.n2nClientHost, ServerPort: a.n2nServerPort(roomID),
 	}
 }
 
