@@ -136,11 +136,11 @@ type noTapLease struct {
 	ExpiresAt   time.Time `json:"expires_at"`
 	SubnetCIDR  string    `json:"subnet_cidr"`
 	Community   string    `json:"community"`
-	RelayHost   string    `json:"relay_host"`
-	RelayPort   int       `json:"relay_port"`
-	RelayToken  string    `json:"relay_token"`
-	IceStunHost string    `json:"ice_stun_host"`
-	IceStunPort int       `json:"ice_stun_port"`
+	RelayHost   string    `json:"relay_host,omitempty"`
+	RelayPort   int       `json:"relay_port,omitempty"`
+	RelayToken  string    `json:"relay_token,omitempty"`
+	IceStunHost string    `json:"ice_stun_host,omitempty"`
+	IceStunPort int       `json:"ice_stun_port,omitempty"`
 	ConnectionMode string `json:"connection_mode"`
 	ServerHost string `json:"server_host,omitempty"`
 	ServerPort int `json:"server_port,omitempty"`

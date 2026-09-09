@@ -27,15 +27,29 @@ const noTapRoomSelect = `
 	ORDER BY r.sort_order, r.id`
 
 func (a *app) noTapLeasePayload(roomID int64, code, subnet, virtualIP, username, connectionMode string, expiresAt time.Time) noTapLease {
-	return noTapLease{
+	payload := noTapLease{
 		RoomID: roomID, VirtualIP: virtualIP, LogicalIP: virtualIP, Username: username,
-		ExpiresAt: expiresAt, SubnetCIDR: subnet, Community: roomCommunity(code, roomID),
-		RelayHost: a.config.noTapRelayHost, RelayPort: a.config.noTapRelayPort,
-		RelayToken:  a.config.noTapRelayToken,
-		IceStunHost: a.config.noTapIceStunHost, IceStunPort: a.config.noTapIceStunPort,
-		ConnectionMode: connectionMode,
-		ServerHost: a.config.n2nClientHost, ServerPort: a.n2nServerPort(roomID),
+		ExpiresAt: expiresAt, SubnetCIDR: subnet, ConnectionMode: connectionMode,
 	}
+	// Keep transport credentials mode-specific. This prevents a TAP client from
+	// accidentally consuming ICE/relay metadata and prevents a No-TAP client
+	// from falling back to the n2n server fields.
+	switch connectionMode {
+	case "tap":
+		payload.Community = roomCommunity(code, roomID)
+		payload.ServerHost = a.config.n2nClientHost
+		payload.ServerPort = a.n2nServerPort(roomID)
+	default:
+		payload.Community = roomCommunity(code, roomID)
+		payload.RelayHost = a.config.noTapRelayHost
+		payload.RelayPort = a.config.noTapRelayPort
+		payload.RelayToken = a.config.noTapRelayToken
+		if connectionMode == "direct" {
+			payload.IceStunHost = a.config.noTapIceStunHost
+			payload.IceStunPort = a.config.noTapIceStunPort
+		}
+	}
+	return payload
 }
 
 func (a *app) noTapRoomSession(w http.ResponseWriter, r *http.Request) {
@@ -70,7 +84,7 @@ func (a *app) listNoTapRooms(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
-	rooms := make([]room, 0, 4)
+	rooms := make([]room, 0, 6)
 	for rows.Next() {
 		var item room
 		if err := rows.Scan(&item.ID, &item.Code, &item.Name, &item.Region, &item.SubnetCIDR,
@@ -137,9 +151,12 @@ func (a *app) listNoTapRoomMembers(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.db.QueryContext(r.Context(), `
 		SELECT p.id, p.username_snapshot, p.nickname_snapshot, l.virtual_ip,
 			COALESCE(l.real_ip, ''), l.user_id = ?,
-			COALESCE(l.ice_local_description, ''),
-			CASE WHEN l.ice_local_description IS NULL OR l.ice_local_description = '' THEN 'waiting' ELSE 'ready' END
+		CASE WHEN r.connection_mode = 'direct' THEN COALESCE(l.ice_local_description, '') ELSE '' END,
+			CASE WHEN r.connection_mode <> 'direct' THEN 'disabled'
+			     WHEN l.ice_local_description IS NULL OR l.ice_local_description = '' THEN 'waiting'
+			     ELSE 'ready' END
 		FROM no_tap_room_leases l
+		INNER JOIN no_tap_rooms r ON r.id = l.room_id
 		INNER JOIN platform_users p ON p.id = l.user_id
 		WHERE l.room_id = ? AND l.released_at IS NULL
 			AND l.credential_expires_at > UTC_TIMESTAMP() AND p.status = 'active'
@@ -557,7 +574,7 @@ func (a *app) publishNoTapICE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request noTapICERequest
-	if !decodeJSON(w, r, &request) || len(request.LocalDescription) < 16 || len(request.LocalDescription) > noTapICEDescriptionMaxLength {
+	if !decodeJSON(w, r, &request) || !validNoTapICEDescription(request.LocalDescription) {
 		respondError(w, http.StatusBadRequest, "ICE candidate 数据无效")
 		return
 	}
