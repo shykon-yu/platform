@@ -24,6 +24,10 @@ const (
 	noTapRoomModesMigration = "20260818_add_no_tap_room_modes"
 	noTapRoomFourMigration  = "20260818_add_no_tap_room_04"
 	noTapTapRoomsMigration  = "20260908_add_no_tap_tap_rooms"
+	noTapRoomLayoutMigration = "20260909_set_no_tap_room_layout"
+	noTapWireGuardRoomsMigration = "20260910_add_no_tap_wireguard_rooms"
+	noTapWireGuardPeersMigration = "20260910_add_no_tap_wireguard_peers"
+	noTapWireGuardClientsMigration = "20260910_add_no_tap_wireguard_clients"
 )
 
 var safeIdentifier = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
@@ -85,6 +89,114 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	if err := runMigration(ctx, db, noTapTapRoomsMigration, migrateNoTapTapRooms); err != nil {
 		return err
 	}
+	if err := runMigration(ctx, db, noTapRoomLayoutMigration, migrateNoTapRoomLayout); err != nil {
+		return err
+	}
+	if err := runMigration(ctx, db, noTapWireGuardRoomsMigration, migrateNoTapWireGuardRooms); err != nil {
+		return err
+	}
+	if err := runMigration(ctx, db, noTapWireGuardPeersMigration, migrateNoTapWireGuardPeers); err != nil {
+		return err
+	}
+	if err := runMigration(ctx, db, noTapWireGuardClientsMigration, migrateNoTapWireGuardClients); err != nil {
+		return err
+	}
+	return nil
+}
+
+// migrateNoTapWireGuardRooms adds the experimental layer-3 room pair. The
+// rooms keep the existing No-TAP relay credentials so clients without a
+// WireGuard runtime can still use the tested Hook/relay fallback path.
+func migrateNoTapWireGuardRooms(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, `ALTER TABLE no_tap_rooms MODIFY connection_mode ENUM('tap', 'direct', 'relay', 'wireguard') NOT NULL DEFAULT 'direct'`); err != nil {
+		return fmt.Errorf("expand no-TAP room modes for WireGuard: %w", err)
+	}
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO no_tap_rooms
+			(id, code, name, region, connection_mode, subnet_cidr, ip_start, ip_end, capacity, status, sort_order)
+		VALUES
+			(7, 'notap-07', '网卡07', '网卡', 'wireguard', '10.222.7.0/24', '10.222.7.10', '10.222.7.109', 100, 'open', 7),
+			(8, 'notap-08', '网卡08', '网卡', 'wireguard', '10.222.8.0/24', '10.222.8.10', '10.222.8.109', 100, 'open', 8)
+		ON DUPLICATE KEY UPDATE
+			name = VALUES(name), region = VALUES(region), connection_mode = VALUES(connection_mode),
+			subnet_cidr = VALUES(subnet_cidr), ip_start = VALUES(ip_start), ip_end = VALUES(ip_end),
+			status = VALUES(status), sort_order = VALUES(sort_order)`)
+	if err != nil {
+		return fmt.Errorf("seed no-TAP WireGuard rooms: %w", err)
+	}
+	return nil
+}
+
+func migrateNoTapWireGuardPeers(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS no_tap_wireguard_peers (
+			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+			room_id BIGINT UNSIGNED NOT NULL,
+			user_id BIGINT UNSIGNED NOT NULL,
+			target_user_id BIGINT UNSIGNED NOT NULL,
+			session_id VARCHAR(43) NOT NULL,
+			match_key VARCHAR(128) NOT NULL,
+			public_key VARCHAR(64) NOT NULL,
+			endpoint_host VARCHAR(255) NOT NULL,
+			endpoint_port SMALLINT UNSIGNED NOT NULL,
+			virtual_ip VARCHAR(15) NOT NULL,
+			expires_at DATETIME NOT NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			PRIMARY KEY (id),
+			UNIQUE KEY no_tap_wg_peer_session (room_id, user_id, target_user_id, session_id, match_key),
+			KEY no_tap_wg_peer_match (room_id, target_user_id, match_key, expires_at),
+			CONSTRAINT no_tap_wg_peer_room_foreign FOREIGN KEY (room_id) REFERENCES no_tap_rooms (id),
+			CONSTRAINT no_tap_wg_peer_user_foreign FOREIGN KEY (user_id) REFERENCES platform_users (id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`); err != nil {
+		return fmt.Errorf("create no-TAP WireGuard peers: %w", err)
+	}
+	for _, column := range []struct{ name, sql string }{
+		{name: "target_user_id", sql: `ALTER TABLE no_tap_wireguard_peers ADD COLUMN target_user_id BIGINT UNSIGNED NOT NULL DEFAULT 0 AFTER user_id`},
+		{name: "endpoint_host", sql: `ALTER TABLE no_tap_wireguard_peers ADD COLUMN endpoint_host VARCHAR(255) NOT NULL DEFAULT '' AFTER public_key`},
+		{name: "endpoint_port", sql: `ALTER TABLE no_tap_wireguard_peers ADD COLUMN endpoint_port SMALLINT UNSIGNED NOT NULL DEFAULT 0 AFTER endpoint_host`},
+	} {
+		exists, err := columnExists(ctx, db, "no_tap_wireguard_peers", column.name)
+		if err != nil { return err }
+		if !exists {
+			if _, err := db.ExecContext(ctx, column.sql); err != nil { return fmt.Errorf("add no-TAP WireGuard peer %s: %w", column.name, err) }
+		}
+	}
+	return nil
+}
+
+func migrateNoTapWireGuardClients(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS no_tap_wireguard_clients (
+			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+			room_id BIGINT UNSIGNED NOT NULL,
+			user_id BIGINT UNSIGNED NOT NULL,
+			session_id VARCHAR(43) NOT NULL,
+			public_key VARCHAR(64) NOT NULL,
+			virtual_ip VARCHAR(15) NOT NULL,
+			endpoint_host VARCHAR(255) NULL,
+			endpoint_port SMALLINT UNSIGNED NULL,
+			expires_at DATETIME NOT NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			PRIMARY KEY (id),
+			UNIQUE KEY no_tap_wg_client_session (room_id, user_id, session_id),
+			KEY no_tap_wg_client_key (public_key, expires_at),
+			CONSTRAINT no_tap_wg_client_room_foreign FOREIGN KEY (room_id) REFERENCES no_tap_rooms (id),
+			CONSTRAINT no_tap_wg_client_user_foreign FOREIGN KEY (user_id) REFERENCES platform_users (id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`); err != nil {
+		return fmt.Errorf("create no-TAP WireGuard clients: %w", err)
+	}
+	for _, column := range []struct{ name, sql string }{
+		{name: "endpoint_host", sql: `ALTER TABLE no_tap_wireguard_clients ADD COLUMN endpoint_host VARCHAR(255) NULL AFTER virtual_ip`},
+		{name: "endpoint_port", sql: `ALTER TABLE no_tap_wireguard_clients ADD COLUMN endpoint_port SMALLINT UNSIGNED NULL AFTER endpoint_host`},
+	} {
+		exists, err := columnExists(ctx, db, "no_tap_wireguard_clients", column.name)
+		if err != nil { return err }
+		if !exists {
+			if _, err := db.ExecContext(ctx, column.sql); err != nil { return fmt.Errorf("add no-TAP WireGuard client %s: %w", column.name, err) }
+		}
+	}
 	return nil
 }
 
@@ -95,7 +207,7 @@ func migrateNoTapRooms(ctx context.Context, db *sql.DB) error {
 			code VARCHAR(32) NOT NULL,
 			name VARCHAR(64) NOT NULL,
 			region VARCHAR(32) NOT NULL,
-			connection_mode ENUM('tap', 'direct', 'relay') NOT NULL DEFAULT 'direct',
+			connection_mode ENUM('tap', 'direct', 'relay', 'wireguard') NOT NULL DEFAULT 'direct',
 			subnet_cidr VARCHAR(32) NOT NULL,
 			ip_start VARCHAR(15) NOT NULL,
 			ip_end VARCHAR(15) NOT NULL,
@@ -161,7 +273,7 @@ func migrateNoTapRoomModes(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	if !column {
-		if _, err := db.ExecContext(ctx, `ALTER TABLE no_tap_rooms ADD COLUMN connection_mode ENUM('tap', 'direct', 'relay') NOT NULL DEFAULT 'direct' AFTER region`); err != nil {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE no_tap_rooms ADD COLUMN connection_mode ENUM('tap', 'direct', 'relay', 'wireguard') NOT NULL DEFAULT 'direct' AFTER region`); err != nil {
 			return fmt.Errorf("add no-TAP room mode: %w", err)
 		}
 	}
@@ -176,19 +288,63 @@ func migrateNoTapRoomModes(ctx context.Context, db *sql.DB) error {
 }
 
 func migrateNoTapTapRooms(ctx context.Context, db *sql.DB) error {
-	if _, err := db.ExecContext(ctx, `ALTER TABLE no_tap_rooms MODIFY connection_mode ENUM('tap', 'direct', 'relay') NOT NULL DEFAULT 'direct'`); err != nil {
+	if _, err := db.ExecContext(ctx, `ALTER TABLE no_tap_rooms MODIFY connection_mode ENUM('tap', 'direct', 'relay', 'wireguard') NOT NULL DEFAULT 'direct'`); err != nil {
 		return fmt.Errorf("expand no-TAP room modes: %w", err)
 	}
 	_, err := db.ExecContext(ctx, `
 		INSERT INTO no_tap_rooms (id, code, name, region, connection_mode, subnet_cidr, ip_start, ip_end, capacity, status, sort_order) VALUES
-		(1, 'notap-01', '网卡房间 01', '网卡', 'tap', '10.222.1.0/24', '10.222.1.10', '10.222.1.109', 100, 'open', 1),
-		(2, 'notap-02', '网卡房间 02', '网卡', 'tap', '10.222.2.0/24', '10.222.2.10', '10.222.2.109', 100, 'open', 2),
-		(3, 'notap-03', '直连房间 03', '直连', 'direct', '10.122.3.0/24', '10.122.3.10', '10.122.3.109', 100, 'open', 3),
-		(4, 'notap-04', '直连房间 04', '直连', 'direct', '10.122.4.0/24', '10.122.4.10', '10.122.4.109', 100, 'open', 4),
-		(5, 'notap-05', '中继房间 05', '中继', 'relay', '10.122.5.0/24', '10.122.5.10', '10.122.5.109', 100, 'open', 5),
-		(6, 'notap-06', '中继房间 06', '中继', 'relay', '10.122.6.0/24', '10.122.6.10', '10.122.6.109', 100, 'open', 6)
+		(1, 'notap-01', '直连01', '直连', 'direct', '10.122.1.0/24', '10.122.1.10', '10.122.1.109', 100, 'open', 1),
+		(2, 'notap-02', '直连02', '直连', 'direct', '10.122.2.0/24', '10.122.2.10', '10.122.2.109', 100, 'open', 2),
+		(3, 'notap-03', '中继03', '中继', 'relay', '10.122.3.0/24', '10.122.3.10', '10.122.3.109', 100, 'open', 3),
+		(4, 'notap-04', '中继04', '中继', 'relay', '10.122.4.0/24', '10.122.4.10', '10.122.4.109', 100, 'open', 4),
+		(5, 'notap-05', '网卡05', '网卡', 'tap', '10.222.5.0/24', '10.222.5.10', '10.222.5.109', 100, 'open', 5),
+		(6, 'notap-06', '网卡06', '网卡', 'tap', '10.222.6.0/24', '10.222.6.10', '10.222.6.109', 100, 'open', 6)
 		ON DUPLICATE KEY UPDATE name=VALUES(name), region=VALUES(region), connection_mode=VALUES(connection_mode), subnet_cidr=VALUES(subnet_cidr), ip_start=VALUES(ip_start), ip_end=VALUES(ip_end), sort_order=VALUES(sort_order)`)
 	if err != nil { return fmt.Errorf("seed no-TAP six transport rooms: %w", err) }
+	return nil
+}
+
+// migrateNoTapRoomLayout applies the user-facing six-room layout to existing
+// installations. The previous migration created TAP rooms 01/02 and direct
+// rooms 03/04, while the client labels already exposed the new layout.
+func migrateNoTapRoomLayout(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, `
+		UPDATE no_tap_rooms
+		SET
+			name = CASE id
+				WHEN 1 THEN '直连01'
+				WHEN 2 THEN '直连02'
+				WHEN 3 THEN '中继03'
+				WHEN 4 THEN '中继04'
+				WHEN 5 THEN '网卡05'
+				WHEN 6 THEN '网卡06'
+			END,
+			region = CASE
+				WHEN id IN (1, 2) THEN '直连'
+				WHEN id IN (3, 4) THEN '中继'
+				ELSE '网卡'
+			END,
+			connection_mode = CASE
+				WHEN id IN (1, 2) THEN 'direct'
+				WHEN id IN (3, 4) THEN 'relay'
+				ELSE 'tap'
+			END,
+			subnet_cidr = CASE
+				WHEN id IN (1, 2, 3, 4) THEN CONCAT('10.122.', id, '.0/24')
+				ELSE CONCAT('10.222.', id, '.0/24')
+			END,
+			ip_start = CASE
+				WHEN id IN (1, 2, 3, 4) THEN CONCAT('10.122.', id, '.10')
+				ELSE CONCAT('10.222.', id, '.10')
+			END,
+			ip_end = CASE
+				WHEN id IN (1, 2, 3, 4) THEN CONCAT('10.122.', id, '.109')
+				ELSE CONCAT('10.222.', id, '.109')
+			END
+		WHERE id BETWEEN 1 AND 6`)
+	if err != nil {
+		return fmt.Errorf("apply no-TAP room layout: %w", err)
+	}
 	return nil
 }
 

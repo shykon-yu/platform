@@ -3,8 +3,11 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -44,9 +47,14 @@ func (a *app) noTapLeasePayload(roomID int64, code, subnet, virtualIP, username,
 		payload.RelayHost = a.config.noTapRelayHost
 		payload.RelayPort = a.config.noTapRelayPort
 		payload.RelayToken = a.config.noTapRelayToken
-		if connectionMode == "direct" {
+		if connectionMode == "direct" || connectionMode == "wireguard" {
 			payload.IceStunHost = a.config.noTapIceStunHost
 			payload.IceStunPort = a.config.noTapIceStunPort
+		}
+		if connectionMode == "wireguard" {
+			payload.WireGuardServerHost = a.config.noTapRelayHost
+			payload.WireGuardServerPort = a.config.wireGuardListenPort
+			payload.WireGuardServerPublicKey = a.config.wireGuardServerPublicKey
 		}
 	}
 	return payload
@@ -151,8 +159,8 @@ func (a *app) listNoTapRoomMembers(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.db.QueryContext(r.Context(), `
 		SELECT p.id, p.username_snapshot, p.nickname_snapshot, l.virtual_ip,
 			COALESCE(l.real_ip, ''), l.user_id = ?,
-		CASE WHEN r.connection_mode = 'direct' THEN COALESCE(l.ice_local_description, '') ELSE '' END,
-			CASE WHEN r.connection_mode <> 'direct' THEN 'disabled'
+		CASE WHEN r.connection_mode IN ('direct', 'wireguard') THEN COALESCE(l.ice_local_description, '') ELSE '' END,
+			CASE WHEN r.connection_mode NOT IN ('direct', 'wireguard') THEN 'disabled'
 			     WHEN l.ice_local_description IS NULL OR l.ice_local_description = '' THEN 'waiting'
 			     ELSE 'ready' END
 		FROM no_tap_room_leases l
@@ -314,6 +322,14 @@ func (a *app) heartbeatNoTapRoom(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusConflict, "无网卡连接已结束，请重新进入")
 		return
 	}
+	// Keep the WireGuard controller registration alive with the room lease.
+	if _, err := a.db.ExecContext(r.Context(), `
+		UPDATE no_tap_wireguard_clients
+		SET expires_at = ?
+		WHERE room_id = ? AND user_id = ? AND session_id = ?`, expiresAt, roomID, userID, sessionID); err != nil {
+		respondError(w, http.StatusInternalServerError, "无法续期网卡连接")
+		return
+	}
 	respondJSON(w, http.StatusOK, map[string]any{"expires_at": expiresAt})
 }
 
@@ -330,6 +346,11 @@ func (a *app) leaveNoTapRoom(w http.ResponseWriter, r *http.Request) {
 		respondErrorCode(w, http.StatusUnauthorized, "SESSION_REPLACED", "账号已在其他设备登录")
 		return
 	}
+	var wireGuardPublicKey string
+	_ = a.db.QueryRowContext(r.Context(), `
+		SELECT public_key FROM no_tap_wireguard_clients
+		WHERE room_id = ? AND user_id = ? AND session_id = ?
+		ORDER BY updated_at DESC LIMIT 1`, roomID, userID, sessionID).Scan(&wireGuardPublicKey)
 	result, err := a.db.ExecContext(r.Context(), `
 		DELETE FROM no_tap_room_leases
 		WHERE room_id = ? AND user_id = ? AND session_id = ? AND released_at IS NULL`, roomID, userID, sessionID)
@@ -341,6 +362,14 @@ func (a *app) leaveNoTapRoom(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, "你不在该无网卡房间内")
 		return
 	}
+	_, _ = a.db.ExecContext(r.Context(), `
+		DELETE FROM no_tap_wireguard_peers
+		WHERE room_id = ? AND ((user_id = ? AND session_id = ?) OR target_user_id = ?)`,
+		roomID, userID, sessionID, userID)
+	if wireGuardPublicKey != "" {
+		_ = a.wireGuardControllerRequest(r.Context(), http.MethodDelete, "/clients/"+url.PathEscape(wireGuardPublicKey), nil, nil)
+	}
+	_, _ = a.db.ExecContext(r.Context(), `DELETE FROM no_tap_wireguard_clients WHERE room_id = ? AND user_id = ? AND session_id = ?`, roomID, userID, sessionID)
 	respondJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -349,6 +378,7 @@ type noTapICERequest struct {
 }
 
 const noTapPeerProbeTTL = 60 * time.Second
+const wireGuardPeerTTL = 45 * time.Second
 const noTapICEDescriptionMaxLength = 16384
 
 type noTapPeerProbeRequest struct {
@@ -408,11 +438,218 @@ func (a *app) requireNoTapDirectRoom(w http.ResponseWriter, r *http.Request, roo
 		respondError(w, http.StatusInternalServerError, "无法确认房间连接模式")
 		return false
 	}
-	if mode != "direct" {
+	if mode != "direct" && mode != "wireguard" {
 		respondError(w, http.StatusConflict, "该房间仅使用云中继")
 		return false
 	}
 	return true
+}
+
+func (a *app) requireWireGuardRoom(w http.ResponseWriter, r *http.Request, roomID int64) bool {
+	var mode string
+	if err := a.db.QueryRowContext(r.Context(), `SELECT connection_mode FROM no_tap_rooms WHERE id = ?`, roomID).Scan(&mode); err != nil {
+		respondError(w, http.StatusInternalServerError, "无法确认网卡房间模式")
+		return false
+	}
+	if mode != "wireguard" {
+		respondError(w, http.StatusConflict, "该房间不使用 WireGuard")
+		return false
+	}
+	return true
+}
+
+func validWireGuardPublicKey(value string) bool {
+	value = strings.TrimSpace(value)
+	return len(value) == 44 && strings.HasSuffix(value, "=")
+}
+
+func validWireGuardEndpointHost(value string) bool {
+	host := strings.TrimSpace(value)
+	if len(host) == 0 || len(host) > 255 || strings.ContainsAny(host, " \t\r\n/\\") {
+		return false
+	}
+	return true
+}
+
+type wireGuardControllerPeer struct {
+	EndpointHost string `json:"endpoint_host"`
+	EndpointPort int    `json:"endpoint_port"`
+}
+
+func (a *app) wireGuardControllerRequest(ctx context.Context, method, path string, body any, result any) error {
+	if a.config.wireGuardControllerURL == "" || a.config.wireGuardControllerSecret == "" {
+		return fmt.Errorf("wireguard controller is not configured")
+	}
+	var reader io.Reader
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil { return err }
+		reader = strings.NewReader(string(encoded))
+	}
+	request, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(a.config.wireGuardControllerURL, "/")+path, reader)
+	if err != nil { return err }
+	request.Header.Set("Authorization", "Bearer "+a.config.wireGuardControllerSecret)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := a.http.Do(request)
+	if err != nil { return err }
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return fmt.Errorf("wireguard controller status %d", response.StatusCode)
+	}
+	if result == nil { return nil }
+	return json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(result)
+}
+
+func (a *app) registerWireGuardClient(w http.ResponseWriter, r *http.Request) {
+	roomID, ok := roomIDFromRequest(w, r)
+	if !ok || !a.requireNoTapRoomMember(w, r, roomID) || !a.requireWireGuardRoom(w, r, roomID) {
+		return
+	}
+	var request wireGuardClientRequest
+	if !decodeJSON(w, r, &request) || !validWireGuardPublicKey(request.PublicKey) {
+		respondError(w, http.StatusBadRequest, "WireGuard 公钥无效")
+		return
+	}
+	var virtualIP, previousPublicKey string
+	err := a.db.QueryRowContext(r.Context(), `
+		SELECT virtual_ip FROM no_tap_room_leases
+		WHERE room_id = ? AND user_id = ? AND session_id = ? AND released_at IS NULL
+			AND credential_expires_at > UTC_TIMESTAMP()`, roomID, currentUserID(r), currentSessionID(r)).Scan(&virtualIP)
+	if err != nil {
+		respondError(w, http.StatusConflict, "网卡房间连接已结束，请重新进入")
+		return
+	}
+	// Re-entering a WireGuard room creates a fresh temporary key. Capture the
+	// previous key before replacing the database row so the controller can
+	// remove its stale peer from the shared interface.
+	_ = a.db.QueryRowContext(r.Context(), `
+		SELECT public_key FROM no_tap_wireguard_clients
+		WHERE room_id = ? AND user_id = ? AND session_id = ?
+		ORDER BY updated_at DESC LIMIT 1`, roomID, currentUserID(r), currentSessionID(r)).Scan(&previousPublicKey)
+	expiresAt := time.Now().UTC().Add(leaseTTL)
+	if err := a.wireGuardControllerRequest(r.Context(), http.MethodPost, "/clients", map[string]any{
+		"room_id": roomID, "public_key": strings.TrimSpace(request.PublicKey),
+		"previous_public_key": strings.TrimSpace(previousPublicKey), "virtual_ip": virtualIP,
+	}, nil); err != nil {
+		respondError(w, http.StatusServiceUnavailable, "WireGuard 服务端暂不可用")
+		return
+	}
+	if _, err := a.db.ExecContext(r.Context(), `
+		INSERT INTO no_tap_wireguard_clients (room_id, user_id, session_id, public_key, virtual_ip, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON DUPLICATE KEY UPDATE public_key=VALUES(public_key), virtual_ip=VALUES(virtual_ip), expires_at=VALUES(expires_at)`,
+		roomID, currentUserID(r), currentSessionID(r), strings.TrimSpace(request.PublicKey), virtualIP, expiresAt); err != nil {
+		// The controller was updated before the database row. Roll the new
+		// peer back if persistence fails so a later client cannot inherit an
+		// untracked virtual address.
+		_ = a.wireGuardControllerRequest(r.Context(), http.MethodDelete, "/clients/"+url.PathEscape(strings.TrimSpace(request.PublicKey)), nil, nil)
+		respondError(w, http.StatusInternalServerError, "无法登记 WireGuard 客户端")
+		return
+	}
+	// A new client registration starts a new match lifecycle. Remove stale
+	// pair records in either direction before the next GAME_PEER event.
+	_, _ = a.db.ExecContext(r.Context(), `
+		DELETE FROM no_tap_wireguard_peers
+		WHERE room_id = ? AND ((user_id = ? AND session_id = ?) OR target_user_id = ?)`,
+		roomID, currentUserID(r), currentSessionID(r), currentUserID(r))
+	respondJSON(w, http.StatusOK, map[string]any{
+		"state": "ready", "virtual_ip": virtualIP, "listen_port": a.config.wireGuardListenPort, "expires_at": expiresAt,
+	})
+}
+
+func (a *app) publishWireGuardPeer(w http.ResponseWriter, r *http.Request) {
+	roomID, ok := roomIDFromRequest(w, r)
+	if !ok || !a.requireNoTapRoomMember(w, r, roomID) || !a.requireWireGuardRoom(w, r, roomID) {
+		return
+	}
+	var request wireGuardPeerRequest
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	request.MatchKey = strings.TrimSpace(request.MatchKey)
+	request.PublicKey = strings.TrimSpace(request.PublicKey)
+	if request.TargetUserID < 1 || request.TargetUserID == currentUserID(r) || len(request.MatchKey) < 3 || len(request.MatchKey) > 128 || !validWireGuardPublicKey(request.PublicKey) {
+		respondError(w, http.StatusBadRequest, "WireGuard 对手参数无效")
+		return
+	}
+	var virtualIP, registeredPublicKey string
+	err := a.db.QueryRowContext(r.Context(), `
+		SELECT l.virtual_ip, c.public_key
+		FROM no_tap_room_leases l
+		JOIN no_tap_wireguard_clients c ON c.room_id = l.room_id AND c.user_id = l.user_id AND c.session_id = l.session_id
+		WHERE l.room_id = ? AND l.user_id = ? AND l.session_id = ? AND l.released_at IS NULL
+			AND l.credential_expires_at > UTC_TIMESTAMP() AND c.expires_at > UTC_TIMESTAMP()`,
+		roomID, currentUserID(r), currentSessionID(r)).Scan(&virtualIP, &registeredPublicKey)
+	if err == sql.ErrNoRows {
+		respondError(w, http.StatusConflict, "网卡房间连接已结束，请重新进入")
+		return
+	}
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "无法读取网卡房间连接")
+		return
+	}
+	if registeredPublicKey != request.PublicKey {
+		respondError(w, http.StatusForbidden, "WireGuard 公钥与当前房间连接不匹配")
+		return
+	}
+	var observed wireGuardControllerPeer
+	if err := a.wireGuardControllerRequest(r.Context(), http.MethodGet, "/clients/"+url.PathEscape(request.PublicKey), nil, &observed); err != nil ||
+		!validWireGuardEndpointHost(observed.EndpointHost) || observed.EndpointPort < 1 || observed.EndpointPort > 65535 {
+		respondError(w, http.StatusConflict, "WireGuard 尚未取得公网端点，请稍后重试")
+		return
+	}
+	var targetPresent bool
+	if err := a.db.QueryRowContext(r.Context(), `
+		SELECT EXISTS(SELECT 1 FROM no_tap_room_leases WHERE room_id = ? AND user_id = ?
+			AND released_at IS NULL AND credential_expires_at > UTC_TIMESTAMP())`, roomID, request.TargetUserID).Scan(&targetPresent); err != nil || !targetPresent {
+		respondError(w, http.StatusConflict, "WireGuard 对手已不在房间")
+		return
+	}
+	expiresAt := time.Now().UTC().Add(wireGuardPeerTTL)
+	if _, err := a.db.ExecContext(r.Context(), `
+		INSERT INTO no_tap_wireguard_peers
+			(room_id, user_id, target_user_id, session_id, match_key, public_key, endpoint_host, endpoint_port, virtual_ip, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON DUPLICATE KEY UPDATE public_key=VALUES(public_key), endpoint_host=VALUES(endpoint_host),
+			endpoint_port=VALUES(endpoint_port), virtual_ip=VALUES(virtual_ip), expires_at=VALUES(expires_at)`,
+		roomID, currentUserID(r), request.TargetUserID, currentSessionID(r), request.MatchKey, request.PublicKey,
+		observed.EndpointHost, observed.EndpointPort, virtualIP, expiresAt); err != nil {
+		respondError(w, http.StatusInternalServerError, "无法保存 WireGuard 对手信息")
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"state": "ready", "expires_at": expiresAt})
+}
+
+func (a *app) getWireGuardPeer(w http.ResponseWriter, r *http.Request) {
+	roomID, ok := roomIDFromRequest(w, r)
+	if !ok || !a.requireNoTapRoomMember(w, r, roomID) || !a.requireWireGuardRoom(w, r, roomID) {
+		return
+	}
+	matchKey := strings.TrimSpace(chi.URLParam(r, "matchKey"))
+	if len(matchKey) < 3 || len(matchKey) > 128 {
+		respondError(w, http.StatusBadRequest, "WireGuard 比赛事务键无效")
+		return
+	}
+	rows, err := a.db.QueryContext(r.Context(), `
+		SELECT user_id, match_key, public_key, endpoint_host, endpoint_port, virtual_ip, expires_at
+		FROM no_tap_wireguard_peers
+		WHERE room_id = ? AND match_key = ? AND target_user_id = ? AND user_id <> ? AND expires_at > UTC_TIMESTAMP()
+		ORDER BY updated_at DESC LIMIT 1`, roomID, matchKey, currentUserID(r), currentUserID(r))
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "无法读取 WireGuard 对手信息")
+		return
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		respondJSON(w, http.StatusOK, map[string]any{"peer": nil})
+		return
+	}
+	var peer wireGuardPeer
+	if err := rows.Scan(&peer.UserID, &peer.MatchKey, &peer.PublicKey, &peer.EndpointHost, &peer.EndpointPort, &peer.VirtualIP, &peer.ExpiresAt); err != nil {
+		respondError(w, http.StatusInternalServerError, "无法读取 WireGuard 对手信息")
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"peer": peer})
 }
 
 func (a *app) createNoTapPeerProbe(w http.ResponseWriter, r *http.Request) {

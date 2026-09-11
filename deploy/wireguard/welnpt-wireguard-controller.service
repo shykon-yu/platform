@@ -1,0 +1,18 @@
+[Unit]
+Description=WEL WireGuard rendezvous controller
+After=network-online.target wg-quick@welwg0.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/wel-platform
+EnvironmentFile=/etc/wel-platform/wireguard-controller.env
+ExecStart=/opt/wel-platform/wgcontroller
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

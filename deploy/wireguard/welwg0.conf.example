@@ -1,0 +1,7 @@
+[Interface]
+Address = 10.222.7.1/24, 10.222.8.1/24
+ListenPort = 51820
+PrivateKey = <SERVER_PRIVATE_KEY>
+
+# Client peers are added at runtime by wgcontroller. Do not copy client
+# private keys here. Keep this file root-only (0600).

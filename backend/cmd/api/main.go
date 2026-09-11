@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -43,6 +44,10 @@ type config struct {
 	noTapRelayToken                                          string
 	noTapIceStunHost                                         string
 	noTapIceStunPort                                         int
+	wireGuardListenPort                                      int
+	wireGuardServerPublicKey                                 string
+	wireGuardControllerURL                                    string
+	wireGuardControllerSecret                                 string
 }
 
 type app struct {
@@ -144,6 +149,9 @@ type noTapLease struct {
 	ConnectionMode string `json:"connection_mode"`
 	ServerHost string `json:"server_host,omitempty"`
 	ServerPort int `json:"server_port,omitempty"`
+	WireGuardServerHost string `json:"wireguard_server_host,omitempty"`
+	WireGuardServerPort int `json:"wireguard_server_port,omitempty"`
+	WireGuardServerPublicKey string `json:"wireguard_server_public_key,omitempty"`
 }
 
 type noTapPeerProbe struct {
@@ -155,6 +163,26 @@ type noTapPeerProbe struct {
 	RequesterDescription string    `json:"requester_description,omitempty"`
 	TargetDescription    string    `json:"target_description,omitempty"`
 	ExpiresAt            time.Time `json:"expires_at"`
+}
+
+type wireGuardPeerRequest struct {
+	TargetUserID int64  `json:"target_user_id"`
+	MatchKey     string `json:"match_key"`
+	PublicKey    string `json:"public_key"`
+}
+
+type wireGuardPeer struct {
+	UserID       int64     `json:"user_id"`
+	MatchKey     string    `json:"match_key"`
+	PublicKey    string    `json:"public_key"`
+	EndpointHost string    `json:"endpoint_host"`
+	EndpointPort int       `json:"endpoint_port"`
+	VirtualIP    string    `json:"virtual_ip"`
+	ExpiresAt    time.Time `json:"expires_at"`
+}
+
+type wireGuardClientRequest struct {
+	PublicKey string `json:"public_key"`
 }
 
 type openVPNLeaseSyncRequest struct {
@@ -244,6 +272,9 @@ func main() {
 				r.Post("/rooms/{roomID}/heartbeat", a.heartbeatNoTapRoom)
 				r.Post("/rooms/{roomID}/leave", a.leaveNoTapRoom)
 				r.Post("/rooms/{roomID}/ice", a.publishNoTapICE)
+				r.Post("/rooms/{roomID}/wireguard/peers", a.publishWireGuardPeer)
+				r.Get("/rooms/{roomID}/wireguard/peers/{matchKey}", a.getWireGuardPeer)
+				r.Post("/rooms/{roomID}/wireguard/client", a.registerWireGuardClient)
 				r.Get("/rooms/{roomID}/peer-probes/incoming", a.listIncomingNoTapPeerProbes)
 				r.Post("/rooms/{roomID}/peer-probes", a.createNoTapPeerProbe)
 				r.Get("/rooms/{roomID}/peer-probes/{probeID}", a.getNoTapPeerProbe)
@@ -281,6 +312,9 @@ func loadConfig() config {
 		n2nClientHost: getenv("N2N_CLIENT_HOST", openVPNClientHost), n2nClientPort: envInt("N2N_CLIENT_PORT", 22222), n2nRoomPorts: parseRoomPorts(getenv("N2N_ROOM_PORTS", "")),
 		noTapRelayHost: getenv("WEL_NOTAP_RELAY_HOST", getenv("N2N_CLIENT_HOST", openVPNClientHost)), noTapRelayPort: envInt("WEL_NOTAP_RELAY_PORT", 22333), noTapRelayToken: getenv("WEL_NOTAP_RELAY_TOKEN", getenv("WEL_NOTAP_TOKEN", "")),
 		noTapIceStunHost: getenv("WEL_NOTAP_ICE_STUN_HOST", "stun.l.google.com"), noTapIceStunPort: envInt("WEL_NOTAP_ICE_STUN_PORT", 19302),
+		wireGuardListenPort: envInt("WEL_WIREGUARD_LISTEN_PORT", 51820),
+		wireGuardServerPublicKey: getenv("WEL_WIREGUARD_SERVER_PUBLIC_KEY", ""),
+		wireGuardControllerURL: getenv("WEL_WIREGUARD_CONTROLLER_URL", ""), wireGuardControllerSecret: getenv("WEL_WIREGUARD_CONTROLLER_SECRET", ""),
 	}
 }
 
@@ -1215,6 +1249,26 @@ func (a *app) reapExpiredLeases(ctx context.Context) {
 	}
 	if _, err := a.db.ExecContext(ctx, "DELETE FROM no_tap_room_leases WHERE released_at IS NULL AND credential_expires_at <= UTC_TIMESTAMP()"); err != nil {
 		a.logger.Error("delete expired no-TAP leases", "error", err)
+	}
+	if _, err := a.db.ExecContext(ctx, "DELETE FROM no_tap_wireguard_peers WHERE expires_at <= UTC_TIMESTAMP()"); err != nil {
+		a.logger.Error("delete expired no-TAP WireGuard peers", "error", err)
+	}
+	clientRows, err := a.db.QueryContext(ctx, "SELECT id, public_key FROM no_tap_wireguard_clients WHERE expires_at <= UTC_TIMESTAMP() LIMIT 100")
+	if err == nil {
+		for clientRows.Next() {
+			var clientID int64
+			var publicKey string
+			if clientRows.Scan(&clientID, &publicKey) == nil && publicKey != "" {
+				if err := a.wireGuardControllerRequest(ctx, http.MethodDelete, "/clients/"+url.PathEscape(publicKey), nil, nil); err != nil {
+					a.logger.Error("delete expired WireGuard client peer", "client_id", clientID, "error", err)
+					continue
+				}
+				if _, err := a.db.ExecContext(ctx, "DELETE FROM no_tap_wireguard_clients WHERE id = ? AND expires_at <= UTC_TIMESTAMP()", clientID); err != nil {
+					a.logger.Error("delete expired WireGuard client record", "client_id", clientID, "error", err)
+				}
+			}
+		}
+		clientRows.Close()
 	}
 }
 
