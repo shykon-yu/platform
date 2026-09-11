@@ -24,12 +24,13 @@ iptables -A FORWARD -i welwg0 -o welwg0 -j ACCEPT
 
 安装顺序：
 
-1. 复制 `welwg0.conf.example` 为 `/etc/wireguard/welwg0.conf`，填入服务端私钥并设置 `0600`。
-2. `systemctl enable --now wg-quick@welwg0`。
-3. 编译并安装 `wgcontroller` 到 `/opt/wel-platform/wgcontroller`。
-4. 复制环境变量示例到 `/etc/wel-platform/wireguard-controller.env`，填入随机密钥。
-5. `systemctl enable --now welnpt-wireguard-controller`。
-6. 给 API 进程设置上面的四个变量并重建 API 容器。
-7. 在 API 容器中请求 `http://host.docker.internal:51821` 验证控制器可达；不要为公网开放 `51821/TCP`。
+1. 安装 `wireguard-tools`。现代内核直接使用内核模块；CentOS 7 的 `3.10` 内核没有模块时，在 `/usr/local/bin/wireguard-go` 安装官方 userspace 实现，`wg-quick` 会自动回退使用它，不需要升级线上内核。
+2. 复制 `welwg0.conf.example` 为 `/etc/wireguard/welwg0.conf`，填入服务端私钥并设置 `0600`。
+3. `systemctl enable --now wg-quick@welwg0`。
+4. 编译并安装 `wgcontroller` 到 `/opt/wel-platform/wgcontroller`。
+5. 复制环境变量示例到 `/etc/wel-platform/wireguard-controller.env`，填入随机密钥。
+6. `systemctl enable --now welnpt-wireguard-controller`。
+7. 给 API 进程设置上面的四个变量并重建 API 容器。
+8. 在 API 容器中请求 `http://host.docker.internal:51821` 验证控制器可达；不要为公网开放 `51821/TCP`。
 
 客户端不会把私钥上传服务器。服务端只在客户端登记时动态加入该客户端公钥和虚拟 IP，并在退出房间时删除；比赛对手 peer 由客户端识别真实 `GAME_PEER` 后按场次加入。
