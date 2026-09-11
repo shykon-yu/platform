@@ -452,7 +452,7 @@ func (a *app) requireWireGuardRoom(w http.ResponseWriter, r *http.Request, roomI
 		return false
 	}
 	if mode != "wireguard" {
-		respondError(w, http.StatusConflict, "该房间不使用 WireGuard")
+		respondError(w, http.StatusConflict, "该房间不使用网卡模式")
 		return false
 	}
 	return true
@@ -515,10 +515,10 @@ func (a *app) registerWireGuardClient(w http.ResponseWriter, r *http.Request) {
 	}
 	var request wireGuardClientRequest
 	if !decodeJSON(w, r, &request) || !validWireGuardPublicKey(request.PublicKey) {
-		respondError(w, http.StatusBadRequest, "WireGuard 公钥无效")
+		respondError(w, http.StatusBadRequest, "网卡公钥无效")
 		return
 	}
-	var virtualIP, previousPublicKey string
+	var virtualIP, previousPublicKey, previousVirtualIP string
 	err := a.db.QueryRowContext(r.Context(), `
 		SELECT virtual_ip FROM no_tap_room_leases
 		WHERE room_id = ? AND user_id = ? AND session_id = ? AND released_at IS NULL
@@ -531,15 +531,15 @@ func (a *app) registerWireGuardClient(w http.ResponseWriter, r *http.Request) {
 	// previous key before replacing the database row so the controller can
 	// remove its stale peer from the shared interface.
 	_ = a.db.QueryRowContext(r.Context(), `
-		SELECT public_key FROM no_tap_wireguard_clients
+		SELECT public_key, virtual_ip FROM no_tap_wireguard_clients
 		WHERE room_id = ? AND user_id = ? AND session_id = ?
-		ORDER BY updated_at DESC LIMIT 1`, roomID, currentUserID(r), currentSessionID(r)).Scan(&previousPublicKey)
+		ORDER BY updated_at DESC LIMIT 1`, roomID, currentUserID(r), currentSessionID(r)).Scan(&previousPublicKey, &previousVirtualIP)
 	expiresAt := time.Now().UTC().Add(leaseTTL)
 	if err := a.wireGuardControllerRequest(r.Context(), http.MethodPost, "/clients", map[string]any{
 		"room_id": roomID, "public_key": strings.TrimSpace(request.PublicKey),
-		"previous_public_key": strings.TrimSpace(previousPublicKey), "virtual_ip": virtualIP,
+		"previous_public_key": strings.TrimSpace(previousPublicKey), "previous_virtual_ip": strings.TrimSpace(previousVirtualIP), "virtual_ip": virtualIP,
 	}, nil); err != nil {
-		respondError(w, http.StatusServiceUnavailable, "WireGuard 服务端暂不可用")
+		respondError(w, http.StatusServiceUnavailable, "网卡服务端暂不可用")
 		return
 	}
 	if _, err := a.db.ExecContext(r.Context(), `
@@ -551,7 +551,7 @@ func (a *app) registerWireGuardClient(w http.ResponseWriter, r *http.Request) {
 		// peer back if persistence fails so a later client cannot inherit an
 		// untracked virtual address.
 		_ = a.wireGuardControllerRequest(r.Context(), http.MethodDelete, "/clients/"+url.PathEscape(strings.TrimSpace(request.PublicKey)), nil, nil)
-		respondError(w, http.StatusInternalServerError, "无法登记 WireGuard 客户端")
+		respondError(w, http.StatusInternalServerError, "无法登记网卡客户端")
 		return
 	}
 	// A new client registration starts a new match lifecycle. Remove stale
@@ -577,7 +577,7 @@ func (a *app) publishWireGuardPeer(w http.ResponseWriter, r *http.Request) {
 	request.MatchKey = strings.TrimSpace(request.MatchKey)
 	request.PublicKey = strings.TrimSpace(request.PublicKey)
 	if request.TargetUserID < 1 || request.TargetUserID == currentUserID(r) || len(request.MatchKey) < 3 || len(request.MatchKey) > 128 || !validWireGuardPublicKey(request.PublicKey) {
-		respondError(w, http.StatusBadRequest, "WireGuard 对手参数无效")
+		respondError(w, http.StatusBadRequest, "网卡对手参数无效")
 		return
 	}
 	var virtualIP, registeredPublicKey string
@@ -597,20 +597,20 @@ func (a *app) publishWireGuardPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if registeredPublicKey != request.PublicKey {
-		respondError(w, http.StatusForbidden, "WireGuard 公钥与当前房间连接不匹配")
+		respondError(w, http.StatusForbidden, "网卡公钥与当前房间连接不匹配")
 		return
 	}
 	var observed wireGuardControllerPeer
 	if err := a.wireGuardControllerRequest(r.Context(), http.MethodGet, "/clients/"+url.PathEscape(request.PublicKey), nil, &observed); err != nil ||
 		!validWireGuardEndpointHost(observed.EndpointHost) || observed.EndpointPort < 1 || observed.EndpointPort > 65535 {
-		respondError(w, http.StatusConflict, "WireGuard 尚未取得公网端点，请稍后重试")
+		respondError(w, http.StatusConflict, "网卡尚未取得公网端点，请稍后重试")
 		return
 	}
 	var targetPresent bool
 	if err := a.db.QueryRowContext(r.Context(), `
 		SELECT EXISTS(SELECT 1 FROM no_tap_room_leases WHERE room_id = ? AND user_id = ?
 			AND released_at IS NULL AND credential_expires_at > UTC_TIMESTAMP())`, roomID, request.TargetUserID).Scan(&targetPresent); err != nil || !targetPresent {
-		respondError(w, http.StatusConflict, "WireGuard 对手已不在房间")
+		respondError(w, http.StatusConflict, "网卡对手已不在房间")
 		return
 	}
 	expiresAt := time.Now().UTC().Add(wireGuardPeerTTL)
@@ -622,7 +622,7 @@ func (a *app) publishWireGuardPeer(w http.ResponseWriter, r *http.Request) {
 			endpoint_port=VALUES(endpoint_port), virtual_ip=VALUES(virtual_ip), expires_at=VALUES(expires_at)`,
 		roomID, currentUserID(r), request.TargetUserID, currentSessionID(r), request.MatchKey, request.PublicKey,
 		observed.EndpointHost, observed.EndpointPort, virtualIP, expiresAt); err != nil {
-		respondError(w, http.StatusInternalServerError, "无法保存 WireGuard 对手信息")
+		respondError(w, http.StatusInternalServerError, "无法保存网卡对手信息")
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]any{"state": "ready", "expires_at": expiresAt})
@@ -635,7 +635,7 @@ func (a *app) getWireGuardPeer(w http.ResponseWriter, r *http.Request) {
 	}
 	matchKey := strings.TrimSpace(chi.URLParam(r, "matchKey"))
 	if len(matchKey) < 3 || len(matchKey) > 128 {
-		respondError(w, http.StatusBadRequest, "WireGuard 比赛事务键无效")
+		respondError(w, http.StatusBadRequest, "网卡比赛事务键无效")
 		return
 	}
 	rows, err := a.db.QueryContext(r.Context(), `
@@ -644,7 +644,7 @@ func (a *app) getWireGuardPeer(w http.ResponseWriter, r *http.Request) {
 		WHERE room_id = ? AND match_key = ? AND target_user_id = ? AND user_id <> ? AND expires_at > UTC_TIMESTAMP()
 		ORDER BY updated_at DESC LIMIT 1`, roomID, matchKey, currentUserID(r), currentUserID(r))
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "无法读取 WireGuard 对手信息")
+		respondError(w, http.StatusInternalServerError, "无法读取网卡对手信息")
 		return
 	}
 	defer rows.Close()
@@ -654,7 +654,7 @@ func (a *app) getWireGuardPeer(w http.ResponseWriter, r *http.Request) {
 	}
 	var peer wireGuardPeer
 	if err := rows.Scan(&peer.UserID, &peer.MatchKey, &peer.PublicKey, &peer.EndpointHost, &peer.EndpointPort, &peer.VirtualIP, &peer.ExpiresAt); err != nil {
-		respondError(w, http.StatusInternalServerError, "无法读取 WireGuard 对手信息")
+		respondError(w, http.StatusInternalServerError, "无法读取网卡对手信息")
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]any{"peer": peer})

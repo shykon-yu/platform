@@ -18,6 +18,7 @@ type clientRequest struct {
 	RoomID            int64  `json:"room_id"`
 	PublicKey         string `json:"public_key"`
 	PreviousPublicKey string `json:"previous_public_key"`
+	PreviousVirtualIP string `json:"previous_virtual_ip"`
 	VirtualIP         string `json:"virtual_ip"`
 }
 
@@ -39,7 +40,25 @@ func validKey(value string) bool {
 	return len(strings.TrimSpace(value)) == 44 && strings.HasSuffix(strings.TrimSpace(value), "=")
 }
 
-func validIP(value string) bool { return net.ParseIP(strings.TrimSpace(value)) != nil }
+func validClientIP(roomID int64, value string) bool {
+	ip := net.ParseIP(strings.TrimSpace(value)).To4()
+	if ip == nil {
+		return false
+	}
+	// 07 and 08 intentionally use disjoint /24 ranges on the shared
+	// interface.  Binding a lease from another room here would leak routes
+	// across room lifecycles and make the controller's room_id meaningless.
+	var prefix byte
+	switch roomID {
+	case 7:
+		prefix = 7
+	case 8:
+		prefix = 8
+	default:
+		return false
+	}
+	return ip[0] == 10 && ip[1] == 222 && ip[2] == prefix && ip[3] >= 10 && ip[3] <= 109
+}
 
 func runWG(args ...string) ([]byte, error) {
 	command := exec.Command("wg", args...)
@@ -48,6 +67,42 @@ func runWG(args ...string) ([]byte, error) {
 		return nil, fmt.Errorf("wg %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
 	}
 	return output, nil
+}
+
+func peerAllowedIP(output, publicKey string) (string, bool) {
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == publicKey {
+			return fields[1], true
+		}
+	}
+	return "", false
+}
+
+func (s server) removePeer(publicKey, expectedVirtualIP string) error {
+	publicKey = strings.TrimSpace(publicKey)
+	if publicKey == "" {
+		return nil
+	}
+	if expectedVirtualIP != "" {
+		output, err := runWG("show", s.interfaceName, "allowed-ips")
+		if err != nil {
+			return err
+		}
+		allowed, found := peerAllowedIP(string(output), publicKey)
+		if !found {
+			return nil
+		}
+		// Never remove a key that has been reused for a different lease.
+		if allowed != expectedVirtualIP+"/32" && allowed != expectedVirtualIP {
+			log.Printf("skip stale peer removal for %s: allowed-ips=%s expected=%s", publicKey, allowed, expectedVirtualIP)
+			return nil
+		}
+	}
+	if _, err := runWG("set", s.interfaceName, "peer", publicKey, "remove"); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s server) clients(w http.ResponseWriter, r *http.Request) {
@@ -60,8 +115,9 @@ func (s server) clients(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input clientRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&input); err != nil || input.RoomID < 1 || !validKey(input.PublicKey) || !validIP(input.VirtualIP) ||
-		(strings.TrimSpace(input.PreviousPublicKey) != "" && !validKey(input.PreviousPublicKey)) {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&input); err != nil || input.RoomID < 1 || !validKey(input.PublicKey) || !validClientIP(input.RoomID, input.VirtualIP) ||
+		(strings.TrimSpace(input.PreviousPublicKey) != "" && !validKey(input.PreviousPublicKey)) ||
+		(strings.TrimSpace(input.PreviousVirtualIP) != "" && !validClientIP(input.RoomID, input.PreviousVirtualIP)) {
 		http.Error(w, "invalid client", http.StatusBadRequest)
 		return
 	}
@@ -76,7 +132,7 @@ func (s server) clients(w http.ResponseWriter, r *http.Request) {
 	if previousPublicKey != "" && previousPublicKey != publicKey {
 		// Install the replacement first. If that fails, the old peer remains
 		// available for the current session instead of being removed early.
-		if _, err := runWG("set", s.interfaceName, "peer", previousPublicKey, "remove"); err != nil {
+		if err := s.removePeer(previousPublicKey, input.PreviousVirtualIP); err != nil {
 			log.Printf("remove previous client peer failed (continuing): %v", err)
 		}
 	}
