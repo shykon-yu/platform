@@ -36,9 +36,9 @@ type config struct {
 	openVPNInternalSecret                                    string
 	openVPNClientPortBase                                    int
 	openVPNRoomPorts                                         map[int64]int
-	n2nClientHost                                             string
-	n2nClientPort                                             int
-	n2nRoomPorts                                              map[int64]int
+	n2nClientHost                                            string
+	n2nClientPort                                            int
+	n2nRoomPorts                                             map[int64]int
 	noTapRelayHost                                           string
 	noTapRelayPort                                           int
 	noTapRelayToken                                          string
@@ -46,8 +46,8 @@ type config struct {
 	noTapIceStunPort                                         int
 	wireGuardListenPort                                      int
 	wireGuardServerPublicKey                                 string
-	wireGuardControllerURL                                    string
-	wireGuardControllerSecret                                 string
+	wireGuardControllerURL                                   string
+	wireGuardControllerSecret                                string
 }
 
 type app struct {
@@ -96,14 +96,14 @@ var (
 )
 
 type room struct {
-	ID         int64  `json:"id"`
-	Code       string `json:"code"`
-	Name       string `json:"name"`
-	Region     string `json:"region"`
-	SubnetCIDR string `json:"subnet_cidr"`
-	Capacity   int    `json:"capacity"`
-	Members    int    `json:"members"`
-	Status     string `json:"status"`
+	ID             int64  `json:"id"`
+	Code           string `json:"code"`
+	Name           string `json:"name"`
+	Region         string `json:"region"`
+	SubnetCIDR     string `json:"subnet_cidr"`
+	Capacity       int    `json:"capacity"`
+	Members        int    `json:"members"`
+	Status         string `json:"status"`
 	ConnectionMode string `json:"connection_mode"`
 }
 
@@ -134,24 +134,24 @@ type lease struct {
 // The two clients use different data planes and must not accidentally consume
 // each other's connection metadata.
 type noTapLease struct {
-	RoomID      int64     `json:"room_id"`
-	VirtualIP   string    `json:"virtual_ip"`
-	LogicalIP   string    `json:"logical_ip"`
-	Username    string    `json:"username"`
-	ExpiresAt   time.Time `json:"expires_at"`
-	SubnetCIDR  string    `json:"subnet_cidr"`
-	Community   string    `json:"community"`
-	RelayHost   string    `json:"relay_host,omitempty"`
-	RelayPort   int       `json:"relay_port,omitempty"`
-	RelayToken  string    `json:"relay_token,omitempty"`
-	IceStunHost string    `json:"ice_stun_host,omitempty"`
-	IceStunPort int       `json:"ice_stun_port,omitempty"`
-	ConnectionMode string `json:"connection_mode"`
-	ServerHost string `json:"server_host,omitempty"`
-	ServerPort int `json:"server_port,omitempty"`
-	WireGuardServerHost string `json:"wireguard_server_host,omitempty"`
-	WireGuardServerPort int `json:"wireguard_server_port,omitempty"`
-	WireGuardServerPublicKey string `json:"wireguard_server_public_key,omitempty"`
+	RoomID                   int64     `json:"room_id"`
+	VirtualIP                string    `json:"virtual_ip"`
+	LogicalIP                string    `json:"logical_ip"`
+	Username                 string    `json:"username"`
+	ExpiresAt                time.Time `json:"expires_at"`
+	SubnetCIDR               string    `json:"subnet_cidr"`
+	Community                string    `json:"community"`
+	RelayHost                string    `json:"relay_host,omitempty"`
+	RelayPort                int       `json:"relay_port,omitempty"`
+	RelayToken               string    `json:"relay_token,omitempty"`
+	IceStunHost              string    `json:"ice_stun_host,omitempty"`
+	IceStunPort              int       `json:"ice_stun_port,omitempty"`
+	ConnectionMode           string    `json:"connection_mode"`
+	ServerHost               string    `json:"server_host,omitempty"`
+	ServerPort               int       `json:"server_port,omitempty"`
+	WireGuardServerHost      string    `json:"wireguard_server_host,omitempty"`
+	WireGuardServerPort      int       `json:"wireguard_server_port,omitempty"`
+	WireGuardServerPublicKey string    `json:"wireguard_server_public_key,omitempty"`
 }
 
 type noTapPeerProbe struct {
@@ -312,9 +312,9 @@ func loadConfig() config {
 		n2nClientHost: getenv("N2N_CLIENT_HOST", openVPNClientHost), n2nClientPort: envInt("N2N_CLIENT_PORT", 22222), n2nRoomPorts: parseRoomPorts(getenv("N2N_ROOM_PORTS", "")),
 		noTapRelayHost: getenv("WEL_NOTAP_RELAY_HOST", getenv("N2N_CLIENT_HOST", openVPNClientHost)), noTapRelayPort: envInt("WEL_NOTAP_RELAY_PORT", 22333), noTapRelayToken: getenv("WEL_NOTAP_RELAY_TOKEN", getenv("WEL_NOTAP_TOKEN", "")),
 		noTapIceStunHost: getenv("WEL_NOTAP_ICE_STUN_HOST", "stun.l.google.com"), noTapIceStunPort: envInt("WEL_NOTAP_ICE_STUN_PORT", 19302),
-		wireGuardListenPort: envInt("WEL_WIREGUARD_LISTEN_PORT", 51820),
+		wireGuardListenPort:      envInt("WEL_WIREGUARD_LISTEN_PORT", 51820),
 		wireGuardServerPublicKey: getenv("WEL_WIREGUARD_SERVER_PUBLIC_KEY", ""),
-		wireGuardControllerURL: getenv("WEL_WIREGUARD_CONTROLLER_URL", ""), wireGuardControllerSecret: getenv("WEL_WIREGUARD_CONTROLLER_SECRET", ""),
+		wireGuardControllerURL:   getenv("WEL_WIREGUARD_CONTROLLER_URL", ""), wireGuardControllerSecret: getenv("WEL_WIREGUARD_CONTROLLER_SECRET", ""),
 	}
 }
 

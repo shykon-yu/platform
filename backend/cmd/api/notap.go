@@ -483,20 +483,28 @@ func (a *app) wireGuardControllerRequest(ctx context.Context, method, path strin
 	var reader io.Reader
 	if body != nil {
 		encoded, err := json.Marshal(body)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		reader = strings.NewReader(string(encoded))
 	}
 	request, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(a.config.wireGuardControllerURL, "/")+path, reader)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	request.Header.Set("Authorization", "Bearer "+a.config.wireGuardControllerSecret)
 	request.Header.Set("Content-Type", "application/json")
 	response, err := a.http.Do(request)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return fmt.Errorf("wireguard controller status %d", response.StatusCode)
 	}
-	if result == nil { return nil }
+	if result == nil {
+		return nil
+	}
 	return json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(result)
 }
 

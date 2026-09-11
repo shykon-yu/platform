@@ -8,25 +8,25 @@ import (
 )
 
 const (
-	soccerIdentityMigration = "20260803_soccer_identity"
-	sixRoomsMigration       = "20260803_limit_rooms_to_six"
-	singleSessionMigration  = "20260805_single_active_session"
-	vpnUsernameMigration    = "20260806_rename_legacy_vpn_username"
-	roomRealIPMigration     = "20260806_add_room_real_ip"
-	roomSubnet222Migration  = "20260809_move_rooms_to_10_222"
-	dynamicOpenVPNMigration = "20260809_dynamic_openvpn_ip"
-	n2nStaticIPMigration    = "20260810_n2n_static_room_ip"
-	noTapRoomsMigration     = "20260814_create_no_tap_rooms"
-	noTapICEMigration       = "20260815_add_no_tap_ice_description"
-	noTapRoomNamesMigration = "20260816_rename_no_tap_room_labels"
-	noTapPeerProbeMigration = "20260816_add_no_tap_peer_probes"
-	noTapGameProbeMigration = "20260817_add_no_tap_game_probe_fields"
-	noTapRoomModesMigration = "20260818_add_no_tap_room_modes"
-	noTapRoomFourMigration  = "20260818_add_no_tap_room_04"
-	noTapTapRoomsMigration  = "20260908_add_no_tap_tap_rooms"
-	noTapRoomLayoutMigration = "20260909_set_no_tap_room_layout"
-	noTapWireGuardRoomsMigration = "20260910_add_no_tap_wireguard_rooms"
-	noTapWireGuardPeersMigration = "20260910_add_no_tap_wireguard_peers"
+	soccerIdentityMigration        = "20260803_soccer_identity"
+	sixRoomsMigration              = "20260803_limit_rooms_to_six"
+	singleSessionMigration         = "20260805_single_active_session"
+	vpnUsernameMigration           = "20260806_rename_legacy_vpn_username"
+	roomRealIPMigration            = "20260806_add_room_real_ip"
+	roomSubnet222Migration         = "20260809_move_rooms_to_10_222"
+	dynamicOpenVPNMigration        = "20260809_dynamic_openvpn_ip"
+	n2nStaticIPMigration           = "20260810_n2n_static_room_ip"
+	noTapRoomsMigration            = "20260814_create_no_tap_rooms"
+	noTapICEMigration              = "20260815_add_no_tap_ice_description"
+	noTapRoomNamesMigration        = "20260816_rename_no_tap_room_labels"
+	noTapPeerProbeMigration        = "20260816_add_no_tap_peer_probes"
+	noTapGameProbeMigration        = "20260817_add_no_tap_game_probe_fields"
+	noTapRoomModesMigration        = "20260818_add_no_tap_room_modes"
+	noTapRoomFourMigration         = "20260818_add_no_tap_room_04"
+	noTapTapRoomsMigration         = "20260908_add_no_tap_tap_rooms"
+	noTapRoomLayoutMigration       = "20260909_set_no_tap_room_layout"
+	noTapWireGuardRoomsMigration   = "20260910_add_no_tap_wireguard_rooms"
+	noTapWireGuardPeersMigration   = "20260910_add_no_tap_wireguard_peers"
 	noTapWireGuardClientsMigration = "20260910_add_no_tap_wireguard_clients"
 )
 
@@ -157,9 +157,13 @@ func migrateNoTapWireGuardPeers(ctx context.Context, db *sql.DB) error {
 		{name: "endpoint_port", sql: `ALTER TABLE no_tap_wireguard_peers ADD COLUMN endpoint_port SMALLINT UNSIGNED NOT NULL DEFAULT 0 AFTER endpoint_host`},
 	} {
 		exists, err := columnExists(ctx, db, "no_tap_wireguard_peers", column.name)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		if !exists {
-			if _, err := db.ExecContext(ctx, column.sql); err != nil { return fmt.Errorf("add no-TAP WireGuard peer %s: %w", column.name, err) }
+			if _, err := db.ExecContext(ctx, column.sql); err != nil {
+				return fmt.Errorf("add no-TAP WireGuard peer %s: %w", column.name, err)
+			}
 		}
 	}
 	return nil
@@ -192,9 +196,13 @@ func migrateNoTapWireGuardClients(ctx context.Context, db *sql.DB) error {
 		{name: "endpoint_port", sql: `ALTER TABLE no_tap_wireguard_clients ADD COLUMN endpoint_port SMALLINT UNSIGNED NULL AFTER endpoint_host`},
 	} {
 		exists, err := columnExists(ctx, db, "no_tap_wireguard_clients", column.name)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		if !exists {
-			if _, err := db.ExecContext(ctx, column.sql); err != nil { return fmt.Errorf("add no-TAP WireGuard client %s: %w", column.name, err) }
+			if _, err := db.ExecContext(ctx, column.sql); err != nil {
+				return fmt.Errorf("add no-TAP WireGuard client %s: %w", column.name, err)
+			}
 		}
 	}
 	return nil
@@ -253,7 +261,9 @@ func migrateNoTapRooms(ctx context.Context, db *sql.DB) error {
 		region, mode, subnetPrefix := "中继", "relay", "10.122"
 		// Keep this first seed compatible with databases whose enum predates TAP;
 		// the follow-up migration expands the enum and applies the final modes.
-		if index <= 4 { region, mode = "直连", "direct" }
+		if index <= 4 {
+			region, mode = "直连", "direct"
+		}
 		subnet := fmt.Sprintf("%s.%d.0/24", subnetPrefix, index)
 		start := fmt.Sprintf("%s.%d.10", subnetPrefix, index)
 		end := fmt.Sprintf("%s.%d.109", subnetPrefix, index)
@@ -300,7 +310,9 @@ func migrateNoTapTapRooms(ctx context.Context, db *sql.DB) error {
 		(5, 'notap-05', '网卡05', '网卡', 'tap', '10.222.5.0/24', '10.222.5.10', '10.222.5.109', 100, 'open', 5),
 		(6, 'notap-06', '网卡06', '网卡', 'tap', '10.222.6.0/24', '10.222.6.10', '10.222.6.109', 100, 'open', 6)
 		ON DUPLICATE KEY UPDATE name=VALUES(name), region=VALUES(region), connection_mode=VALUES(connection_mode), subnet_cidr=VALUES(subnet_cidr), ip_start=VALUES(ip_start), ip_end=VALUES(ip_end), sort_order=VALUES(sort_order)`)
-	if err != nil { return fmt.Errorf("seed no-TAP six transport rooms: %w", err) }
+	if err != nil {
+		return fmt.Errorf("seed no-TAP six transport rooms: %w", err)
+	}
 	return nil
 }
 
