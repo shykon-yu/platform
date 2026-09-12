@@ -3,11 +3,8 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -420,69 +417,8 @@ func (a *app) requireNoTapDirectRoom(w http.ResponseWriter, r *http.Request, roo
 	return true
 }
 
-func (a *app) requireWireGuardRoom(w http.ResponseWriter, r *http.Request, roomID int64) bool {
-	var mode string
-	if err := a.db.QueryRowContext(r.Context(), `SELECT connection_mode FROM no_tap_rooms WHERE id = ?`, roomID).Scan(&mode); err != nil {
-		respondError(w, http.StatusInternalServerError, "无法确认网卡房间模式")
-		return false
-	}
-	if mode != "wireguard" {
-		respondError(w, http.StatusConflict, "该房间不使用网卡模式")
-		return false
-	}
-	return true
-}
-
-func validWireGuardPublicKey(value string) bool {
-	value = strings.TrimSpace(value)
-	return len(value) == 44 && strings.HasSuffix(value, "=")
-}
-
-func validWireGuardEndpointHost(value string) bool {
-	host := strings.TrimSpace(value)
-	if len(host) == 0 || len(host) > 255 || strings.ContainsAny(host, " \t\r\n/\\") {
-		return false
-	}
-	return true
-}
-
-type wireGuardControllerPeer struct {
-	EndpointHost string `json:"endpoint_host"`
-	EndpointPort int    `json:"endpoint_port"`
-}
-
-func (a *app) wireGuardControllerRequest(ctx context.Context, method, path string, body any, result any) error {
-	if a.config.wireGuardControllerURL == "" || a.config.wireGuardControllerSecret == "" {
-		return fmt.Errorf("wireguard controller is not configured")
-	}
-	var reader io.Reader
-	if body != nil {
-		encoded, err := json.Marshal(body)
-		if err != nil {
-			return err
-		}
-		reader = strings.NewReader(string(encoded))
-	}
-	request, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(a.config.wireGuardControllerURL, "/")+path, reader)
-	if err != nil {
-		return err
-	}
-	request.Header.Set("Authorization", "Bearer "+a.config.wireGuardControllerSecret)
-	request.Header.Set("Content-Type", "application/json")
-	response, err := a.http.Do(request)
-	if err != nil {
-		return err
-	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("wireguard controller status %d", response.StatusCode)
-	}
-	if result == nil {
-		return nil
-	}
-	return json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(result)
-}
-
+/* retired WireGuard room handlers removed */
+/*
 func (a *app) registerWireGuardClient(w http.ResponseWriter, r *http.Request) {
 	roomID, ok := roomIDFromRequest(w, r)
 	if !ok || !a.requireNoTapRoomMember(w, r, roomID) || !a.requireWireGuardRoom(w, r, roomID) {
@@ -539,7 +475,9 @@ func (a *app) registerWireGuardClient(w http.ResponseWriter, r *http.Request) {
 		"state": "ready", "virtual_ip": virtualIP, "listen_port": a.config.wireGuardListenPort, "expires_at": expiresAt,
 	})
 }
+*/
 
+/*
 func (a *app) publishWireGuardPeer(w http.ResponseWriter, r *http.Request) {
 	roomID, ok := roomIDFromRequest(w, r)
 	if !ok || !a.requireNoTapRoomMember(w, r, roomID) || !a.requireWireGuardRoom(w, r, roomID) {
@@ -634,6 +572,7 @@ func (a *app) getWireGuardPeer(w http.ResponseWriter, r *http.Request) {
 	}
 	respondJSON(w, http.StatusOK, map[string]any{"peer": peer})
 }
+*/
 
 func (a *app) createNoTapPeerProbe(w http.ResponseWriter, r *http.Request) {
 	roomID, ok := roomIDFromRequest(w, r)
