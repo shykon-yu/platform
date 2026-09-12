@@ -43,11 +43,6 @@ type config struct {
 	noTapRelayToken                                          string
 	noTapIceStunHost                                         string
 	noTapIceStunPort                                         int
-	// Deprecated WireGuard settings are retained only for source compatibility
-	// with retired handlers; no route or runtime path uses them.
-	wireGuardListenPort       int
-	wireGuardControllerURL    string
-	wireGuardControllerSecret string
 }
 
 type app struct {
@@ -160,26 +155,6 @@ type noTapPeerProbe struct {
 	RequesterDescription string    `json:"requester_description,omitempty"`
 	TargetDescription    string    `json:"target_description,omitempty"`
 	ExpiresAt            time.Time `json:"expires_at"`
-}
-
-type wireGuardPeerRequest struct {
-	TargetUserID int64  `json:"target_user_id"`
-	MatchKey     string `json:"match_key"`
-	PublicKey    string `json:"public_key"`
-}
-
-type wireGuardPeer struct {
-	UserID       int64     `json:"user_id"`
-	MatchKey     string    `json:"match_key"`
-	PublicKey    string    `json:"public_key"`
-	EndpointHost string    `json:"endpoint_host"`
-	EndpointPort int       `json:"endpoint_port"`
-	VirtualIP    string    `json:"virtual_ip"`
-	ExpiresAt    time.Time `json:"expires_at"`
-}
-
-type wireGuardClientRequest struct {
-	PublicKey string `json:"public_key"`
 }
 
 type openVPNLeaseSyncRequest struct {

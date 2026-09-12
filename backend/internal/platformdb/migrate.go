@@ -29,6 +29,7 @@ const (
 	noTapWireGuardPeersMigration   = "20260910_add_no_tap_wireguard_peers"
 	noTapWireGuardClientsMigration = "20260910_add_no_tap_wireguard_clients"
 	noTapRetireWireGuardMigration  = "20260913_retire_no_tap_wireguard"
+	noTapPurgeRetiredMigration     = "20260913_purge_retired_no_tap_rooms"
 )
 
 var safeIdentifier = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
@@ -95,6 +96,29 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	}
 	if err := runMigration(ctx, db, noTapRetireWireGuardMigration, migrateRetireNoTapWireGuard); err != nil {
 		return err
+	}
+	if err := runMigration(ctx, db, noTapPurgeRetiredMigration, migratePurgeRetiredNoTapRooms); err != nil {
+		return err
+	}
+	return nil
+}
+
+// migratePurgeRetiredNoTapRooms is a second idempotent guard for installations
+// where the old room rows were restored or recreated after the first cleanup.
+// The No-TAP API exposes exactly six rooms, so anything beyond that boundary
+// is retired data and must not remain selectable.
+func migratePurgeRetiredNoTapRooms(ctx context.Context, db *sql.DB) error {
+	statements := []string{
+		`DROP TABLE IF EXISTS no_tap_wireguard_peers`,
+		`DROP TABLE IF EXISTS no_tap_wireguard_clients`,
+		`DELETE FROM no_tap_room_leases WHERE room_id > 6`,
+		`DELETE FROM no_tap_rooms WHERE id > 6`,
+		`ALTER TABLE no_tap_rooms MODIFY connection_mode ENUM('tap', 'direct', 'relay') NOT NULL DEFAULT 'direct'`,
+	}
+	for _, statement := range statements {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("purge retired no-TAP rooms: %w", err)
+		}
 	}
 	return nil
 }
@@ -229,7 +253,7 @@ func migrateNoTapRooms(ctx context.Context, db *sql.DB) error {
 			code VARCHAR(32) NOT NULL,
 			name VARCHAR(64) NOT NULL,
 			region VARCHAR(32) NOT NULL,
-			connection_mode ENUM('tap', 'direct', 'relay', 'wireguard') NOT NULL DEFAULT 'direct',
+			connection_mode ENUM('tap', 'direct', 'relay') NOT NULL DEFAULT 'direct',
 			subnet_cidr VARCHAR(32) NOT NULL,
 			ip_start VARCHAR(15) NOT NULL,
 			ip_end VARCHAR(15) NOT NULL,
@@ -297,7 +321,7 @@ func migrateNoTapRoomModes(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	if !column {
-		if _, err := db.ExecContext(ctx, `ALTER TABLE no_tap_rooms ADD COLUMN connection_mode ENUM('tap', 'direct', 'relay', 'wireguard') NOT NULL DEFAULT 'direct' AFTER region`); err != nil {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE no_tap_rooms ADD COLUMN connection_mode ENUM('tap', 'direct', 'relay') NOT NULL DEFAULT 'direct' AFTER region`); err != nil {
 			return fmt.Errorf("add no-TAP room mode: %w", err)
 		}
 	}
@@ -312,7 +336,7 @@ func migrateNoTapRoomModes(ctx context.Context, db *sql.DB) error {
 }
 
 func migrateNoTapTapRooms(ctx context.Context, db *sql.DB) error {
-	if _, err := db.ExecContext(ctx, `ALTER TABLE no_tap_rooms MODIFY connection_mode ENUM('tap', 'direct', 'relay', 'wireguard') NOT NULL DEFAULT 'direct'`); err != nil {
+	if _, err := db.ExecContext(ctx, `ALTER TABLE no_tap_rooms MODIFY connection_mode ENUM('tap', 'direct', 'relay') NOT NULL DEFAULT 'direct'`); err != nil {
 		return fmt.Errorf("expand no-TAP room modes: %w", err)
 	}
 	_, err := db.ExecContext(ctx, `

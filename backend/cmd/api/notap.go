@@ -26,6 +26,7 @@ const noTapRoomSelect = `
 	FROM no_tap_rooms r
 	LEFT JOIN no_tap_room_leases l
 		ON l.room_id = r.id AND l.released_at IS NULL AND l.credential_expires_at > UTC_TIMESTAMP()
+	WHERE r.id BETWEEN 1 AND 6
 	GROUP BY r.id
 	ORDER BY r.sort_order, r.id`
 
@@ -116,7 +117,7 @@ func (a *app) getNoTapRoom(w http.ResponseWriter, r *http.Request) {
 		FROM no_tap_rooms r
 		LEFT JOIN no_tap_room_leases l
 			ON l.room_id = r.id AND l.released_at IS NULL AND l.credential_expires_at > UTC_TIMESTAMP()
-		WHERE r.id = ?
+		WHERE r.id = ? AND r.id BETWEEN 1 AND 6
 		GROUP BY r.id`, roomID).Scan(
 		&item.ID, &item.Code, &item.Name, &item.Region, &item.SubnetCIDR, &item.Capacity,
 		&item.Status, &item.ConnectionMode, &item.Members)
@@ -215,7 +216,7 @@ func (a *app) joinNoTapRoom(w http.ResponseWriter, r *http.Request) {
 	var capacity int
 	err = tx.QueryRowContext(r.Context(), `
 		SELECT code, subnet_cidr, ip_start, ip_end, status, capacity, connection_mode
-		FROM no_tap_rooms WHERE id = ? FOR UPDATE`, roomID).Scan(&code, &subnet, &ipStart, &ipEnd, &status, &capacity, &connectionMode)
+		FROM no_tap_rooms WHERE id = ? AND id BETWEEN 1 AND 6 FOR UPDATE`, roomID).Scan(&code, &subnet, &ipStart, &ipEnd, &status, &capacity, &connectionMode)
 	if err == sql.ErrNoRows {
 		respondError(w, http.StatusNotFound, "无网卡房间不存在")
 		return
