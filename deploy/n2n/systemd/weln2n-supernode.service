@@ -1,0 +1,16 @@
+[Unit]
+Description=WEL n2n supernode
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/weln2n.env
+ExecStart=/usr/local/bin/supernode -f -p ${N2N_PORT}
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

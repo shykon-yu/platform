@@ -1,10 +1,8 @@
 # WE8 对战平台
 
-面向 Windows 的实况足球 8 虚拟局域网对战平台。当前仓库包含 Go API、MySQL/Redis 开发环境，以及 Vue 3 + Electron 客户端骨架。Electron 22 作为 Windows 客户端主线，用于兼容 Windows 7。
+面向 Windows 的实况足球 8 虚拟局域网对战平台。当前仓库主要包含 Go API、MySQL/Redis 开发环境和后端部署配置。Windows 客户端主线在 `welopenvpn/` 仓库。
 
 项目进度和后续计划见：[PROJECT_STATUS.md](./PROJECT_STATUS.md)
-
-Windows 安装器集成 SoftEther 的实现说明见：[docs/windows-installer.md](./docs/windows-installer.md)
 
 ## 当前阶段
 
@@ -14,11 +12,11 @@ Windows 安装器集成 SoftEther 的实现说明见：[docs/windows-installer.m
 - 进入房间后事务化分配房间租约
 - 退出房间释放 IP
 - 在线租约心跳续期和失联自动回收
-- SoftEther 连接凭据下发适配层
+- OpenVPN 房间地址和端口下发
 - Windows 游戏路径选择和启动命令
 - Windows 实际虚拟 IP 检测、旧虚拟网卡冲突诊断
 
-SoftEther `vpncmd` 模式已经可以真实下发临时账号；Windows Electron 客户端会在进入房间后创建并连接 SoftEther Client 账号。Windows NSIS 安装器会在安装阶段集成 SoftEther VPN Client、创建 `VPN` 虚拟网卡并写入虚拟局域网 Ping 防火墙规则。
+Windows Electron 客户端进入房间后连接对应 OpenVPN TAP 房间，安装器负责安装联机组件、创建 `WEL TAP` 虚拟网卡并写入虚拟局域网 Ping 防火墙规则。
 
 ## macOS 开发环境
 
@@ -51,9 +49,9 @@ VITE_API_BASE_URL=http://192.168.x.x:8080/api/v1
 VITE_WS_BASE_URL=ws://192.168.x.x:8080/api/v1
 ```
 
-macOS 防火墙需要允许端口 `8080`。真实 WE8 联机测试仍需连接阿里云 SoftEther Server，不能使用 macOS 浏览器预览代替。
+macOS 防火墙需要允许端口 `8080`。真实 WE8 联机测试仍需连接阿里云 OpenVPN 房间服务，不能使用 macOS 浏览器预览代替。
 
-Windows Electron 客户端在进入房间时会调用本机 `vpncmd.exe` 自动连接虚拟网络。浏览器预览只验证 API 和界面，不会连接 VPN 或启动本机游戏。
+Windows Electron 客户端在进入房间时会调用本机 OpenVPN 自动连接虚拟网络。浏览器预览只验证 API 和界面，不会连接 VPN 或启动本机游戏。
 
 ## 环境变量
 
