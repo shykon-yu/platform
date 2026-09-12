@@ -28,6 +28,7 @@ const (
 	noTapWireGuardRoomsMigration   = "20260910_add_no_tap_wireguard_rooms"
 	noTapWireGuardPeersMigration   = "20260910_add_no_tap_wireguard_peers"
 	noTapWireGuardClientsMigration = "20260910_add_no_tap_wireguard_clients"
+	noTapRetireWireGuardMigration  = "20260913_retire_no_tap_wireguard"
 )
 
 var safeIdentifier = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
@@ -92,14 +93,27 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	if err := runMigration(ctx, db, noTapRoomLayoutMigration, migrateNoTapRoomLayout); err != nil {
 		return err
 	}
-	if err := runMigration(ctx, db, noTapWireGuardRoomsMigration, migrateNoTapWireGuardRooms); err != nil {
+	if err := runMigration(ctx, db, noTapRetireWireGuardMigration, migrateRetireNoTapWireGuard); err != nil {
 		return err
 	}
-	if err := runMigration(ctx, db, noTapWireGuardPeersMigration, migrateNoTapWireGuardPeers); err != nil {
-		return err
+	return nil
+}
+
+// migrateRetireNoTapWireGuard permanently removes the experimental 07/08
+// room pair.  The cleanup is intentionally idempotent so an existing
+// production database converges safely on the six-room layout.
+func migrateRetireNoTapWireGuard(ctx context.Context, db *sql.DB) error {
+	statements := []string{
+		`DROP TABLE IF EXISTS no_tap_wireguard_peers`,
+		`DROP TABLE IF EXISTS no_tap_wireguard_clients`,
+		`DELETE FROM no_tap_room_leases WHERE room_id IN (7, 8)`,
+		`DELETE FROM no_tap_rooms WHERE id IN (7, 8)`,
+		`ALTER TABLE no_tap_rooms MODIFY connection_mode ENUM('tap', 'direct', 'relay') NOT NULL DEFAULT 'direct'`,
 	}
-	if err := runMigration(ctx, db, noTapWireGuardClientsMigration, migrateNoTapWireGuardClients); err != nil {
-		return err
+	for _, statement := range statements {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("retire no-TAP WireGuard: %w", err)
+		}
 	}
 	return nil
 }

@@ -148,16 +148,16 @@ func TestMigrateLegacySchema(t *testing.T) {
 		wantStart := fmt.Sprintf("%s.%d.10", subnetPrefix, id)
 		wantEnd := fmt.Sprintf("%s.%d.109", subnetPrefix, id)
 		wantMode := "tap"
-		if id <= 2 { wantMode = "direct" } else if id <= 4 { wantMode = "relay" } else if id >= 7 { wantMode = "wireguard" }
-		if id < 1 || id > 8 || mode != wantMode || subnet != wantSubnet || start != wantStart || end != wantEnd {
+		if id <= 2 { wantMode = "direct" } else if id <= 4 { wantMode = "relay" }
+		if id < 1 || id > 6 || mode != wantMode || subnet != wantSubnet || start != wantStart || end != wantEnd {
 			t.Fatalf("No-TAP room %d = %q %q-%q", id, subnet, start, end)
 		}
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate No-TAP rooms: %v", err)
 	}
-	if roomCount != 8 {
-		t.Fatalf("No-TAP room count = %d, want 8", roomCount)
+	if roomCount != 6 {
+		t.Fatalf("No-TAP room count = %d, want 6", roomCount)
 	}
 
 	for _, item := range []struct{ table, column string }{

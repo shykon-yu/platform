@@ -50,23 +50,6 @@ func TestNoTapLeasePayloadUsesTapFieldsOnlyForTap(t *testing.T) {
 	}
 }
 
-func TestNoTapLeasePayloadUsesICEFallbackForWireGuard(t *testing.T) {
-	a := &app{config: config{
-		noTapRelayHost:    "relay.example.test",
-		noTapRelayPort:    22333,
-		noTapRelayToken:   "relay-secret",
-		noTapIceStunHost:  "stun.example.test",
-		noTapIceStunPort:  3478,
-	}}
-	got := a.noTapLeasePayload(7, "notap-07", "10.222.7.0/24", "10.222.7.10", "wg-user", "wireguard", time.Now())
-	if got.ConnectionMode != "wireguard" || got.IceStunHost != "stun.example.test" || got.IceStunPort != 3478 {
-		t.Fatalf("WireGuard payload did not preserve ICE fallback = %#v", got)
-	}
-	if got.ServerHost != "" || got.ServerPort != 0 {
-		t.Fatalf("WireGuard payload leaked TAP fields = %#v", got)
-	}
-}
-
 func TestParseIPv4RejectsInvalidNoTapAddress(t *testing.T) {
 	for _, value := range []string{"", "10.122.1", "10.122.1.256", "10.122.-1.10"} {
 		if got := parseIPv4(value); got != nil {

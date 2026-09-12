@@ -69,7 +69,7 @@ CREATE TABLE no_tap_rooms (
   code VARCHAR(32) NOT NULL,
   name VARCHAR(64) NOT NULL,
   region VARCHAR(32) NOT NULL,
-  connection_mode ENUM('tap', 'direct', 'relay', 'wireguard') NOT NULL DEFAULT 'direct',
+  connection_mode ENUM('tap', 'direct', 'relay') NOT NULL DEFAULT 'direct',
   subnet_cidr VARCHAR(32) NOT NULL,
   ip_start VARCHAR(15) NOT NULL,
   ip_end VARCHAR(15) NOT NULL,
@@ -122,52 +122,10 @@ CREATE TABLE no_tap_peer_probes (
   CONSTRAINT no_tap_peer_probes_target_foreign FOREIGN KEY (target_user_id) REFERENCES platform_users (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE no_tap_wireguard_peers (
-  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  room_id BIGINT UNSIGNED NOT NULL,
-  user_id BIGINT UNSIGNED NOT NULL,
-  target_user_id BIGINT UNSIGNED NOT NULL,
-  session_id VARCHAR(43) NOT NULL,
-  match_key VARCHAR(128) NOT NULL,
-  public_key VARCHAR(64) NOT NULL,
-  endpoint_host VARCHAR(255) NOT NULL,
-  endpoint_port SMALLINT UNSIGNED NOT NULL,
-  virtual_ip VARCHAR(15) NOT NULL,
-  expires_at DATETIME NOT NULL,
-  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (id),
-  UNIQUE KEY no_tap_wg_peer_session (room_id, user_id, target_user_id, session_id, match_key),
-  KEY no_tap_wg_peer_match (room_id, target_user_id, match_key, expires_at),
-  CONSTRAINT no_tap_wg_peer_room_foreign FOREIGN KEY (room_id) REFERENCES no_tap_rooms (id),
-  CONSTRAINT no_tap_wg_peer_user_foreign FOREIGN KEY (user_id) REFERENCES platform_users (id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE no_tap_wireguard_clients (
-  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  room_id BIGINT UNSIGNED NOT NULL,
-  user_id BIGINT UNSIGNED NOT NULL,
-  session_id VARCHAR(43) NOT NULL,
-  public_key VARCHAR(64) NOT NULL,
-  virtual_ip VARCHAR(15) NOT NULL,
-  endpoint_host VARCHAR(255) NULL,
-  endpoint_port SMALLINT UNSIGNED NULL,
-  expires_at DATETIME NOT NULL,
-  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (id),
-  UNIQUE KEY no_tap_wg_client_session (room_id, user_id, session_id),
-  KEY no_tap_wg_client_key (public_key, expires_at),
-  CONSTRAINT no_tap_wg_client_room_foreign FOREIGN KEY (room_id) REFERENCES no_tap_rooms (id),
-  CONSTRAINT no_tap_wg_client_user_foreign FOREIGN KEY (user_id) REFERENCES platform_users (id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 INSERT INTO no_tap_rooms (id, code, name, region, connection_mode, subnet_cidr, ip_start, ip_end, capacity, sort_order) VALUES
   (1, 'notap-01', '直连01', '直连', 'direct', '10.122.1.0/24', '10.122.1.10', '10.122.1.109', 100, 1),
   (2, 'notap-02', '直连02', '直连', 'direct', '10.122.2.0/24', '10.122.2.10', '10.122.2.109', 100, 2),
   (3, 'notap-03', '中继03', '中继', 'relay', '10.122.3.0/24', '10.122.3.10', '10.122.3.109', 100, 3),
   (4, 'notap-04', '中继04', '中继', 'relay', '10.122.4.0/24', '10.122.4.10', '10.122.4.109', 100, 4),
   (5, 'notap-05', '网卡05', '网卡', 'tap', '10.222.5.0/24', '10.222.5.10', '10.222.5.109', 100, 5),
-  (6, 'notap-06', '网卡06', '网卡', 'tap', '10.222.6.0/24', '10.222.6.10', '10.222.6.109', 100, 6),
-  (7, 'notap-07', '网卡07', '网卡', 'wireguard', '10.222.7.0/24', '10.222.7.10', '10.222.7.109', 100, 7),
-  (8, 'notap-08', '网卡08', '网卡', 'wireguard', '10.222.8.0/24', '10.222.8.10', '10.222.8.109', 100, 8);
+  (6, 'notap-06', '网卡06', '网卡', 'tap', '10.222.6.0/24', '10.222.6.10', '10.222.6.109', 100, 6);

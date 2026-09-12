@@ -47,14 +47,9 @@ func (a *app) noTapLeasePayload(roomID int64, code, subnet, virtualIP, username,
 		payload.RelayHost = a.config.noTapRelayHost
 		payload.RelayPort = a.config.noTapRelayPort
 		payload.RelayToken = a.config.noTapRelayToken
-		if connectionMode == "direct" || connectionMode == "wireguard" {
+		if connectionMode == "direct" {
 			payload.IceStunHost = a.config.noTapIceStunHost
 			payload.IceStunPort = a.config.noTapIceStunPort
-		}
-		if connectionMode == "wireguard" {
-			payload.WireGuardServerHost = a.config.noTapRelayHost
-			payload.WireGuardServerPort = a.config.wireGuardListenPort
-			payload.WireGuardServerPublicKey = a.config.wireGuardServerPublicKey
 		}
 	}
 	return payload
@@ -159,8 +154,8 @@ func (a *app) listNoTapRoomMembers(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.db.QueryContext(r.Context(), `
 		SELECT p.id, p.username_snapshot, p.nickname_snapshot, l.virtual_ip,
 			COALESCE(l.real_ip, ''), l.user_id = ?,
-		CASE WHEN r.connection_mode IN ('direct', 'wireguard') THEN COALESCE(l.ice_local_description, '') ELSE '' END,
-			CASE WHEN r.connection_mode NOT IN ('direct', 'wireguard') THEN 'disabled'
+		CASE WHEN r.connection_mode = 'direct' THEN COALESCE(l.ice_local_description, '') ELSE '' END,
+			CASE WHEN r.connection_mode <> 'direct' THEN 'disabled'
 			     WHEN l.ice_local_description IS NULL OR l.ice_local_description = '' THEN 'waiting'
 			     ELSE 'ready' END
 		FROM no_tap_room_leases l
@@ -322,14 +317,6 @@ func (a *app) heartbeatNoTapRoom(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusConflict, "无网卡连接已结束，请重新进入")
 		return
 	}
-	// Keep the WireGuard controller registration alive with the room lease.
-	if _, err := a.db.ExecContext(r.Context(), `
-		UPDATE no_tap_wireguard_clients
-		SET expires_at = ?
-		WHERE room_id = ? AND user_id = ? AND session_id = ?`, expiresAt, roomID, userID, sessionID); err != nil {
-		respondError(w, http.StatusInternalServerError, "无法续期网卡连接")
-		return
-	}
 	respondJSON(w, http.StatusOK, map[string]any{"expires_at": expiresAt})
 }
 
@@ -346,11 +333,6 @@ func (a *app) leaveNoTapRoom(w http.ResponseWriter, r *http.Request) {
 		respondErrorCode(w, http.StatusUnauthorized, "SESSION_REPLACED", "账号已在其他设备登录")
 		return
 	}
-	var wireGuardPublicKey string
-	_ = a.db.QueryRowContext(r.Context(), `
-		SELECT public_key FROM no_tap_wireguard_clients
-		WHERE room_id = ? AND user_id = ? AND session_id = ?
-		ORDER BY updated_at DESC LIMIT 1`, roomID, userID, sessionID).Scan(&wireGuardPublicKey)
 	result, err := a.db.ExecContext(r.Context(), `
 		DELETE FROM no_tap_room_leases
 		WHERE room_id = ? AND user_id = ? AND session_id = ? AND released_at IS NULL`, roomID, userID, sessionID)
@@ -362,14 +344,6 @@ func (a *app) leaveNoTapRoom(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, "你不在该无网卡房间内")
 		return
 	}
-	_, _ = a.db.ExecContext(r.Context(), `
-		DELETE FROM no_tap_wireguard_peers
-		WHERE room_id = ? AND ((user_id = ? AND session_id = ?) OR target_user_id = ?)`,
-		roomID, userID, sessionID, userID)
-	if wireGuardPublicKey != "" {
-		_ = a.wireGuardControllerRequest(r.Context(), http.MethodDelete, "/clients/"+url.PathEscape(wireGuardPublicKey), nil, nil)
-	}
-	_, _ = a.db.ExecContext(r.Context(), `DELETE FROM no_tap_wireguard_clients WHERE room_id = ? AND user_id = ? AND session_id = ?`, roomID, userID, sessionID)
 	respondJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -438,7 +412,7 @@ func (a *app) requireNoTapDirectRoom(w http.ResponseWriter, r *http.Request, roo
 		respondError(w, http.StatusInternalServerError, "无法确认房间连接模式")
 		return false
 	}
-	if mode != "direct" && mode != "wireguard" {
+	if mode != "direct" {
 		respondError(w, http.StatusConflict, "该房间仅使用云中继")
 		return false
 	}
