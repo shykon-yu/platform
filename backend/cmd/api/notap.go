@@ -362,6 +362,7 @@ type noTapPeerProbeRequest struct {
 
 type noTapPeerProbeAnswerRequest struct {
 	LocalDescription string `json:"local_description"`
+	SessionKey       string `json:"session_key"`
 }
 
 func validNoTapICEDescription(value string) bool {
@@ -642,12 +643,17 @@ func (a *app) listIncomingNoTapPeerProbes(w http.ResponseWriter, r *http.Request
 		return
 	}
 	purpose := normalizeNoTapProbePurpose(r.URL.Query().Get("purpose"))
+	sessionKey := strings.TrimSpace(r.URL.Query().Get("session_key"))
+	if purpose == "game" && (len(sessionKey) < 3 || len(sessionKey) > 128) {
+		respondError(w, http.StatusBadRequest, "比赛直连事务键无效")
+		return
+	}
 	rows, err := a.db.QueryContext(r.Context(), `
 		SELECT id, requester_user_id, target_user_id, purpose, COALESCE(session_key, ''), requester_description, expires_at
 		FROM no_tap_peer_probes
-		WHERE room_id = ? AND target_user_id = ? AND purpose = ? AND target_description IS NULL
+		WHERE room_id = ? AND target_user_id = ? AND purpose = ? AND (? = '' OR COALESCE(session_key, '') = ?) AND target_description IS NULL
 			AND expires_at > UTC_TIMESTAMP()
-		ORDER BY id DESC LIMIT 32`, roomID, currentUserID(r), purpose)
+		ORDER BY id DESC LIMIT 32`, roomID, currentUserID(r), purpose, sessionKey, sessionKey)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "无法读取直连探测")
 		return
@@ -678,13 +684,15 @@ func (a *app) getNoTapPeerProbe(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	sessionKey := strings.TrimSpace(r.URL.Query().Get("session_key"))
 	var probe noTapPeerProbe
 	err := a.db.QueryRowContext(r.Context(), `
 		SELECT id, requester_user_id, target_user_id, purpose, COALESCE(session_key, ''), requester_description,
 			COALESCE(target_description, ''), expires_at
 		FROM no_tap_peer_probes
-		WHERE id = ? AND room_id = ? AND (requester_user_id = ? OR target_user_id = ?)
-			AND expires_at > UTC_TIMESTAMP()`, probeID, roomID, currentUserID(r), currentUserID(r)).Scan(
+		WHERE id = ? AND room_id = ? AND (session_key = ? OR (purpose = 'ping' AND ? = ''))
+			AND (requester_user_id = ? OR target_user_id = ?)
+			AND expires_at > UTC_TIMESTAMP()`, probeID, roomID, sessionKey, sessionKey, currentUserID(r), currentUserID(r)).Scan(
 		&probe.ID, &probe.RequesterUserID, &probe.TargetUserID, &probe.Purpose, &probe.SessionKey, &probe.RequesterDescription, &probe.TargetDescription, &probe.ExpiresAt)
 	if err == sql.ErrNoRows {
 		respondError(w, http.StatusNotFound, "直连探测已结束")
@@ -711,11 +719,17 @@ func (a *app) answerNoTapPeerProbe(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "直连探测 candidate 无效")
 		return
 	}
+	request.SessionKey = strings.TrimSpace(request.SessionKey)
+	if request.SessionKey != "" && (len(request.SessionKey) < 3 || len(request.SessionKey) > 128) {
+		respondError(w, http.StatusBadRequest, "比赛直连事务键无效")
+		return
+	}
 	result, err := a.db.ExecContext(r.Context(), `
 		UPDATE no_tap_peer_probes
 		SET target_description = ?
-		WHERE id = ? AND room_id = ? AND target_user_id = ? AND target_description IS NULL
-			AND expires_at > UTC_TIMESTAMP()`, request.LocalDescription, probeID, roomID, currentUserID(r))
+		WHERE id = ? AND room_id = ? AND target_user_id = ?
+			AND (session_key = ? OR (purpose = 'ping' AND ? = '')) AND target_description IS NULL
+			AND expires_at > UTC_TIMESTAMP()`, request.LocalDescription, probeID, roomID, currentUserID(r), request.SessionKey, request.SessionKey)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "无法响应直连探测")
 		return
